@@ -43,11 +43,29 @@ let activity = [
   { id: 4, text: 'Ngozi placed new order',         meta: 'Order #BF-0039', date: '2026-06-09T09:03:00Z' },
 ];
 
+// WhatsApp threads — in a real system, an NLP/AI step would populate `detected`
+// from the message text. Here it's pre-computed to keep the demo focused on
+// the API/integration layer rather than building an NLP pipeline.
+let whatsappThreads = [
+  {
+    id: 'WA-1',
+    phone: '+234 805 772 3318',
+    customerId: null, // null = unknown/new customer
+    status: 'pending', // pending | ordered | ignored
+    messages: [
+      { from: 'them', text: 'Hi, I want the Rose Silk perfume. How much is it?' },
+      { from: 'us',   text: 'Rose Silk is ₦12,000 + ₦1,500 delivery. Should I create your order?' },
+      { from: 'them', text: "Yes please! I'm in Lekki Phase 1" },
+    ],
+    detected: { productId: 'DS-003', qty: 1, location: 'Lekki Phase 1', deliveryFee: 1500, isNewCustomer: true },
+  },
+];
+
 let nextOrderNum = 43;
 let nextPaymentNum = 5;
 
 module.exports = {
-  products, customers, orders, payments, activity,
+  products, customers, orders, payments, activity, whatsappThreads,
   nextOrderId: () => `BF-${String(nextOrderNum++).padStart(4, '0')}`,
   nextPaymentId: () => `PAY-${nextPaymentNum++}`,
 };
