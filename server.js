@@ -20,6 +20,7 @@ app.use('/api/orders', require('./routes/orders'));
 app.use('/api/customers', require('./routes/customers'));
 app.use('/api/products', require('./routes/inventory'));
 app.use('/api/payments', require('./routes/payments'));
+app.use('/api/whatsapp', require('./routes/whatsapp'));
 
 app.get('/', (req, res) => {
   res.json({ status: 'BizFlow API running', endpoints: '/api/dashboard, /api/orders, /api/customers, /api/products, /api/payments' });
