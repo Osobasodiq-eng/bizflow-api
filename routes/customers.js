@@ -1,54 +1,80 @@
 // routes/customers.js
-// Powers the "Customers" panel: segment chart + customer detail card + customer table
-
 const express = require('express');
 const router = express.Router();
-const db = require('../data/store');
+const pool = require('../db/pool');
 
-// Derive live stats (orders count, spend, last order, tag) from the orders table
-// rather than storing them redundantly — this is how real APIs usually do it.
-function withStats(customer) {
-  const custOrders = db.orders.filter(o => o.customerId === customer.id && o.status !== 'Cancelled');
-  const spend = custOrders.reduce((sum, o) => sum + o.amount, 0);
-  const sorted = [...custOrders].sort((a, b) => new Date(b.date) - new Date(a.date));
-  const lastOrder = sorted[0] || null;
-
-  return {
-    ...customer,
-    orderCount: custOrders.length,
-    spend,
-    lastOrderDate: lastOrder ? lastOrder.date : null,
-    lastOrderItem: lastOrder ? lastOrder.items[0]?.name : null,
-  };
+// Computes orderCount/spend/lastOrderDate live from the orders table,
+// same approach as the in-memory version — just SQL instead of .filter()
+async function withStats(businessId, customerRows) {
+  if (!customerRows.length) return [];
+  const ids = customerRows.map(c => c.id);
+  const { rows: orderRows } = await pool.query(
+    `SELECT customer_id, amount, items, created_at FROM orders
+     WHERE business_id = $1 AND customer_id = ANY($2) AND status != 'Cancelled'`,
+    [businessId, ids]
+  );
+  return customerRows.map(c => {
+    const custOrders = orderRows.filter(o => o.customer_id === c.id);
+    const spend = custOrders.reduce((sum, o) => sum + Number(o.amount), 0);
+    const sorted = [...custOrders].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const last = sorted[0];
+    return {
+      ...c,
+      orderCount: custOrders.length,
+      spend,
+      lastOrderDate: last ? last.created_at : null,
+      lastOrderItem: last ? last.items[0]?.name : null,
+    };
+  });
 }
 
-// GET /api/customers/segments -> counts for the segment bar chart (VIP/Frequent/New/At Risk)
-router.get('/segments', (req, res) => {
+router.get('/segments', async (req, res) => {
+  const { rows } = await pool.query('SELECT tag, COUNT(*) FROM customers WHERE business_id = $1 GROUP BY tag', [req.businessId]);
   const counts = { VIP: 0, Frequent: 0, New: 0, 'At Risk': 0 };
-  db.customers.forEach(c => { if (counts[c.tag] !== undefined) counts[c.tag]++; });
+  rows.forEach(r => { if (counts[r.tag] !== undefined) counts[r.tag] = Number(r.count); });
   res.json(counts);
 });
 
-// GET /api/customers -> the "All customers" table
-router.get('/', (req, res) => {
-  res.json(db.customers.map(withStats));
+router.get('/', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM customers WHERE business_id = $1 ORDER BY id', [req.businessId]);
+  res.json(await withStats(req.businessId, rows));
 });
 
-// GET /api/customers/:id -> the customer detail card (e.g. "Amaka Okonkwo" card)
-router.get('/:id', (req, res) => {
-  const customer = db.customers.find(c => c.id === req.params.id);
-  if (!customer) return res.status(404).json({ error: 'Customer not found' });
-  res.json(withStats(customer));
+router.get('/:id', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM customers WHERE id = $1 AND business_id = $2', [req.params.id, req.businessId]);
+  if (!rows[0]) return res.status(404).json({ error: 'Customer not found' });
+  const [withStatsRow] = await withStats(req.businessId, rows);
+  res.json(withStatsRow);
 });
 
-// POST /api/customers -> create a customer (used when a new order comes from an unknown number)
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const { name, phone, location } = req.body;
   if (!name || !phone) return res.status(400).json({ error: 'name and phone are required' });
-  const id = `C-${String(db.customers.length + 1).padStart(3, '0')}`;
-  const customer = { id, name, phone, location: location || 'Unknown', since: new Date().toISOString(), tag: 'New' };
-  db.customers.push(customer);
-  res.status(201).json(customer);
+  const { rows } = await pool.query(
+    `INSERT INTO customers (business_id, name, phone, location, tag) VALUES ($1, $2, $3, $4, 'New') RETURNING *`,
+    [req.businessId, name, phone, location || 'Unknown']
+  );
+  res.status(201).json(rows[0]);
+});
+
+router.patch('/:id', async (req, res) => {
+  const fields = ['name', 'phone', 'location', 'tag'];
+  const updates = fields.filter(f => req.body[f] !== undefined);
+  if (!updates.length) return res.status(400).json({ error: 'No valid fields to update' });
+  const setClause = updates.map((f, i) => `${f} = $${i + 1}`).join(', ');
+  const values = updates.map(f => req.body[f]);
+  const { rows } = await pool.query(
+    `UPDATE customers SET ${setClause} WHERE id = $${updates.length + 1} AND business_id = $${updates.length + 2} RETURNING *`,
+    [...values, req.params.id, req.businessId]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Customer not found' });
+  res.json(rows[0]);
+});
+
+router.delete('/:id', async (req, res) => {
+  const { rowCount } = await pool.query('DELETE FROM customers WHERE id = $1 AND business_id = $2', [req.params.id, req.businessId]);
+  if (!rowCount) return res.status(404).json({ error: 'Customer not found' });
+  res.status(204).send();
 });
 
 module.exports = router;

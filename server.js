@@ -1,29 +1,28 @@
 // server.js
-// This file just wires everything together. Each panel in your dashboard
-// gets its own "router" mounted at a base path — this keeps the code
-// organized the same way your UI is organized.
-
 const express = require('express');
 const cors = require('cors');
+const { router: authRouter, requireAuth } = require('./routes/auth');
 
 const app = express();
-const PORT = 4000;
+const PORT = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(express.json());
 
-// Mount each resource's routes at its base path.
-// e.g. router.get('/summary') inside routes/dashboard.js becomes
-// GET /api/dashboard/summary once mounted here.
-app.use('/api/dashboard', require('./routes/dashboard'));
-app.use('/api/orders', require('./routes/orders'));
-app.use('/api/customers', require('./routes/customers'));
-app.use('/api/products', require('./routes/inventory'));
-app.use('/api/payments', require('./routes/payments'));
-app.use('/api/whatsapp', require('./routes/whatsapp'));
+// Auth routes are PUBLIC — you need to sign up / log in before you have a token
+app.use('/api/auth', authRouter);
+
+// Everything below this line requires a valid "Authorization: Bearer <token>"
+// header. requireAuth reads the token and sets req.businessId, which every
+// route file then uses to filter its SQL queries.
+app.use('/api/dashboard', requireAuth, require('./routes/dashboard'));
+app.use('/api/orders', requireAuth, require('./routes/orders'));
+app.use('/api/customers', requireAuth, require('./routes/customers'));
+app.use('/api/products', requireAuth, require('./routes/inventory'));
+app.use('/api/payments', requireAuth, require('./routes/payments'));
 
 app.get('/', (req, res) => {
-  res.json({ status: 'BizFlow API running', endpoints: '/api/dashboard, /api/orders, /api/customers, /api/products, /api/payments' });
+  res.json({ status: 'BizFlow API (multi-business) running' });
 });
 
 app.listen(PORT, () => {

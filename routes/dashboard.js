@@ -1,114 +1,85 @@
 // routes/dashboard.js
-// Powers the main "Dashboard" panel: 4 KPI cards + 4 charts + activity feed.
-// Every number here is CALCULATED from orders/payments/products —
-// nothing is hardcoded. This is how real analytics dashboards work.
-
 const express = require('express');
 const router = express.Router();
-const db = require('../data/store');
+const pool = require('../db/pool');
 
-function startOfToday() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
+router.get('/summary', async (req, res) => {
+  const businessId = req.businessId;
+  const { rows: orders } = await pool.query('SELECT * FROM orders WHERE business_id = $1', [businessId]);
+  const { rows: products } = await pool.query('SELECT quantity, threshold FROM products WHERE business_id = $1', [businessId]);
 
-// GET /api/dashboard/summary -> the 4 KPI cards
-router.get('/summary', (req, res) => {
-  const today = startOfToday();
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
 
-  const ordersToday = db.orders.filter(o => new Date(o.date) >= today);
-  const revenueToday = ordersToday
-    .filter(o => o.paymentStatus === 'Paid')
-    .reduce((sum, o) => sum + o.amount, 0);
+  const ordersToday = orders.filter(o => new Date(o.created_at) >= today);
+  const revenueToday = ordersToday.filter(o => o.payment_status === 'Paid').reduce((s, o) => s + Number(o.amount), 0);
+  const ordersYesterday = orders.filter(o => new Date(o.created_at) >= yesterday && new Date(o.created_at) < today);
+  const revenueYesterday = ordersYesterday.filter(o => o.payment_status === 'Paid').reduce((s, o) => s + Number(o.amount), 0);
 
-  const ordersYesterday = db.orders.filter(o => new Date(o.date) >= yesterday && new Date(o.date) < today);
-  const revenueYesterday = ordersYesterday
-    .filter(o => o.paymentStatus === 'Paid')
-    .reduce((sum, o) => sum + o.amount, 0);
-  const revenueChangePct = revenueYesterday > 0
-    ? Math.round(((revenueToday - revenueYesterday) / revenueYesterday) * 100)
-    : null;
-
-  const unpaidOrders = db.orders.filter(o => o.paymentStatus === 'Awaiting');
-  const unpaidAmount = unpaidOrders.reduce((sum, o) => sum + o.amount, 0);
-
-  const lowStock = db.products.filter(p => p.quantity > 0 && p.quantity <= p.threshold).length
-    + db.products.filter(p => p.quantity === 0).length;
+  const unpaid = orders.filter(o => o.payment_status === 'Awaiting');
+  const lowStock = products.filter(p => p.quantity <= p.threshold).length;
 
   res.json({
     revenueToday,
-    revenueChangePct,
+    revenueChangePct: revenueYesterday > 0 ? Math.round(((revenueToday - revenueYesterday) / revenueYesterday) * 100) : null,
     ordersToday: ordersToday.length,
-    unpaidAmount,
-    unpaidCount: unpaidOrders.length,
+    unpaidAmount: unpaid.reduce((s, o) => s + Number(o.amount), 0),
+    unpaidCount: unpaid.length,
     lowStockCount: lowStock,
   });
 });
 
-// GET /api/dashboard/revenue-trend -> line chart, revenue per day for last 7 days
-router.get('/revenue-trend', (req, res) => {
+router.get('/revenue-trend', async (req, res) => {
+  const { rows } = await pool.query(`SELECT amount, created_at FROM orders WHERE business_id = $1 AND payment_status = 'Paid'`, [req.businessId]);
   const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const totals = days.map(day => ({ day, revenue: 0 }));
-
-  db.orders.filter(o => o.paymentStatus === 'Paid').forEach(o => {
-    const dayIndex = (new Date(o.date).getDay() + 6) % 7;
-    totals[dayIndex].revenue += o.amount;
-  });
-
+  rows.forEach(o => { totals[(new Date(o.created_at).getDay() + 6) % 7].revenue += Number(o.amount); });
   res.json(totals);
 });
 
-// GET /api/dashboard/payment-methods -> donut chart
-router.get('/payment-methods', (req, res) => {
-  const confirmed = db.payments.filter(p => p.status === 'Confirmed');
-  const total = confirmed.reduce((sum, p) => sum + p.amount, 0) || 1;
+router.get('/payment-methods', async (req, res) => {
+  const { rows } = await pool.query(`SELECT method, amount FROM payments WHERE business_id = $1 AND status = 'Confirmed'`, [req.businessId]);
+  const total = rows.reduce((s, p) => s + Number(p.amount), 0) || 1;
   const byMethod = { Transfer: 0, POS: 0, Cash: 0 };
-  confirmed.forEach(p => { byMethod[p.method] += p.amount; });
-
-  res.json({
-    total,
-    breakdown: Object.entries(byMethod).map(([method, amount]) => ({
-      method,
-      amount,
-      pct: Math.round((amount / total) * 100),
-    })),
-  });
+  rows.forEach(p => { if (byMethod[p.method] !== undefined) byMethod[p.method] += Number(p.amount); });
+  res.json({ total, breakdown: Object.entries(byMethod).map(([method, amount]) => ({ method, amount, pct: Math.round((amount / total) * 100) })) });
 });
 
-// GET /api/dashboard/orders-by-status -> bar chart
-router.get('/orders-by-status', (req, res) => {
-  const statuses = ['New', 'Processing', 'Paid', 'Shipped', 'Delivered', 'Cancelled'];
-  const counts = statuses.map(status => ({
-    status,
-    count: db.orders.filter(o => o.status === status).length,
-  }));
-  res.json(counts);
+router.get('/orders-by-status', async (req, res) => {
+  const { rows } = await pool.query('SELECT status, COUNT(*) FROM orders WHERE business_id = $1 GROUP BY status', [req.businessId]);
+  const statuses = ['New', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
+  const counts = Object.fromEntries(rows.map(r => [r.status, Number(r.count)]));
+  res.json(statuses.map(status => ({ status, count: counts[status] || 0 })));
 });
 
-// GET /api/dashboard/top-products -> horizontal bar chart, units sold this month
-router.get('/top-products', (req, res) => {
+router.get('/top-products', async (req, res) => {
+  const { rows } = await pool.query(`SELECT items FROM orders WHERE business_id = $1 AND status != 'Cancelled'`, [req.businessId]);
   const unitsSold = {};
-  db.orders.filter(o => o.status !== 'Cancelled').forEach(o => {
-    o.items.forEach(item => {
-      unitsSold[item.name] = (unitsSold[item.name] || 0) + item.qty;
-    });
-  });
-
-  const ranked = Object.entries(unitsSold)
-    .map(([name, units]) => ({ name, units }))
-    .sort((a, b) => b.units - a.units)
-    .slice(0, 5);
-
+  rows.forEach(o => { o.items.forEach(item => { unitsSold[item.name] = (unitsSold[item.name] || 0) + item.qty; }); });
+  const ranked = Object.entries(unitsSold).map(([name, units]) => ({ name, units })).sort((a, b) => b.units - a.units).slice(0, 5);
   res.json(ranked);
 });
 
-// GET /api/dashboard/activity -> "Today's activity" timeline
-router.get('/activity', (req, res) => {
-  const sorted = [...db.activity].sort((a, b) => new Date(b.date) - new Date(a.date));
-  res.json(sorted);
+// Activity feed is computed live from recent orders + payments — no separate
+// table needed, same principle as everything else being derived, not stored.
+router.get('/activity', async (req, res) => {
+  const businessId = req.businessId;
+  const { rows: recentOrders } = await pool.query(
+    `SELECT o.id, o.status, o.created_at, c.name AS customer_name FROM orders o
+     LEFT JOIN customers c ON c.id = o.customer_id WHERE o.business_id = $1 ORDER BY o.created_at DESC LIMIT 5`,
+    [businessId]
+  );
+  const { rows: recentPayments } = await pool.query(
+    `SELECT amount, paid_at, order_id FROM payments WHERE business_id = $1 AND paid_at IS NOT NULL ORDER BY paid_at DESC LIMIT 5`,
+    [businessId]
+  );
+
+  const items = [
+    ...recentOrders.map(o => ({ text: `${o.customer_name || 'A customer'} placed an order`, meta: `Order #BF-${String(o.id).padStart(4, '0')}`, date: o.created_at })),
+    ...recentPayments.map(p => ({ text: `₦${Number(p.amount).toLocaleString()} payment confirmed`, meta: `Order #BF-${String(p.order_id).padStart(4, '0')}`, date: p.paid_at })),
+  ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
+
+  res.json(items);
 });
 
 module.exports = router;

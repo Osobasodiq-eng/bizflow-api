@@ -1,13 +1,17 @@
 {
   "name": "bizflow-api",
-  "version": "1.0.0",
-  "description": "Backend API powering the BizFlow analytics dashboard",
+  "version": "2.0.0",
+  "description": "Multi-business BizFlow API with real Postgres database and login",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "migrate": "node db/migrate.js"
   },
   "dependencies": {
     "express": "^4.19.2",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "pg": "^8.11.5",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2"
   }
 }
