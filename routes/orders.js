@@ -126,4 +126,71 @@ router.delete('/:idOrCode', async (req, res) => {
   res.status(204).send();
 });
 
+// POST /import — bulk-create orders from a parsed CSV. Each CSV row = one
+// order with ONE product (the common case for small-business exports).
+// Customer is matched by phone number if it already exists, otherwise a
+// new customer is created. Product is matched by exact name (case-
+// insensitive) within this business. Each row runs in its own short
+// transaction so stock decrements stay atomic per-row, and one bad row
+// doesn't abort the rest of the file.
+router.post('/import', async (req, res) => {
+  const rows = req.body.rows;
+  if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'rows array is required' });
+
+  let created = 0;
+  const errors = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (!r.customerName || !r.customerPhone) throw new Error('customerName and customerPhone are required');
+      if (!r.productName) throw new Error('productName is required');
+      const qty = Number(r.quantity) || 1;
+
+      let custResult = await client.query('SELECT id FROM customers WHERE business_id = $1 AND phone = $2', [req.businessId, r.customerPhone]);
+      let customerId;
+      if (custResult.rows.length) {
+        customerId = custResult.rows[0].id;
+      } else {
+        const newCust = await client.query(
+          `INSERT INTO customers (business_id, name, phone, location, tag) VALUES ($1, $2, $3, $4, 'New') RETURNING id`,
+          [req.businessId, r.customerName, r.customerPhone, r.location || 'Unknown']
+        );
+        customerId = newCust.rows[0].id;
+      }
+
+      const prodResult = await client.query(
+        `SELECT * FROM products WHERE business_id = $1 AND LOWER(name) = LOWER($2) FOR UPDATE`,
+        [req.businessId, r.productName]
+      );
+      const product = prodResult.rows[0];
+      if (!product) throw new Error(`Product "${r.productName}" not found`);
+      if (product.quantity < qty) throw new Error(`Not enough stock for ${product.name} (have ${product.quantity}, need ${qty})`);
+
+      await client.query('UPDATE products SET quantity = quantity - $1 WHERE id = $2', [qty, product.id]);
+      const amount = Number(product.price) * qty;
+      const items = JSON.stringify([{ productId: product.id, name: product.name, qty }]);
+
+      await client.query(
+        `INSERT INTO orders (business_id, customer_id, items, amount, payment_status, status, delivery)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [req.businessId, customerId, items, amount, r.paymentStatus || 'Awaiting', r.status || 'New', r.delivery || null]
+      );
+
+      await client.query('COMMIT');
+      created++;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      errors.push({ row: i + 1, customer: r.customerName || '(no name)', error: err.message });
+    } finally {
+      client.release();
+    }
+  }
+
+  res.json({ created, errors });
+});
+
 module.exports = router;

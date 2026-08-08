@@ -77,4 +77,27 @@ router.delete('/:id', async (req, res) => {
   res.status(204).send();
 });
 
+// POST /import — bulk-create customers from a parsed CSV
+router.post('/import', async (req, res) => {
+  const rows = req.body.rows;
+  if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'rows array is required' });
+
+  let created = 0;
+  const errors = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    try {
+      if (!r.name || !r.phone) throw new Error('name and phone are required');
+      await pool.query(
+        `INSERT INTO customers (business_id, name, phone, location, tag) VALUES ($1, $2, $3, $4, 'New')`,
+        [req.businessId, r.name, r.phone, r.location || 'Unknown']
+      );
+      created++;
+    } catch (err) {
+      errors.push({ row: i + 1, name: r.name || '(no name)', error: err.message });
+    }
+  }
+  res.json({ created, errors });
+});
+
 module.exports = router;

@@ -70,4 +70,30 @@ router.delete('/:id', async (req, res) => {
   res.status(204).send();
 });
 
+// POST /import — bulk-create products from a parsed CSV. Each row is
+// processed independently so one bad row doesn't stop the whole file;
+// the response reports exactly what succeeded and what didn't.
+router.post('/import', async (req, res) => {
+  const rows = req.body.rows;
+  if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'rows array is required' });
+
+  let created = 0;
+  const errors = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    try {
+      if (!r.name || r.cost == null || r.price == null) throw new Error('name, cost, and price are required');
+      await pool.query(
+        `INSERT INTO products (business_id, name, category, cost, price, quantity, threshold)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [req.businessId, r.name, r.category || 'Uncategorized', Number(r.cost), Number(r.price), Number(r.quantity) || 0, Number(r.threshold) || 5]
+      );
+      created++;
+    } catch (err) {
+      errors.push({ row: i + 1, name: r.name || '(no name)', error: err.message });
+    }
+  }
+  res.json({ created, errors });
+});
+
 module.exports = router;

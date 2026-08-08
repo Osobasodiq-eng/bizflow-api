@@ -86,4 +86,46 @@ router.post('/:orderIdOrCode/mark-paid', async (req, res) => {
   }
 });
 
+// POST /import — bulk-create payment records from a parsed CSV. Unlike
+// products/customers/orders, payments can't be created standalone — each
+// row MUST reference an existing order (by its BF-#### code), since a
+// payment is always a record of money received against a specific order.
+router.post('/import', async (req, res) => {
+  const rows = req.body.rows;
+  if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'rows array is required' });
+
+  let created = 0;
+  const errors = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    try {
+      if (!r.orderId) throw new Error('orderId is required (e.g. BF-0042)');
+      const orderNum = String(r.orderId).replace(/^BF-0*/i, '');
+
+      const orderResult = await pool.query('SELECT * FROM orders WHERE id = $1 AND business_id = $2', [orderNum, req.businessId]);
+      const order = orderResult.rows[0];
+      if (!order) throw new Error(`Order ${r.orderId} not found`);
+
+      const amount = r.amount != null && r.amount !== '' ? Number(r.amount) : Number(order.amount);
+      const status = r.status || 'Confirmed';
+      const paidAt = r.date ? new Date(r.date) : new Date();
+
+      await pool.query(
+        `INSERT INTO payments (business_id, order_id, customer_id, amount, method, ref, status, paid_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [req.businessId, order.id, order.customer_id, amount, r.method || 'Transfer', r.ref || null, status, paidAt]
+      );
+      if (status === 'Confirmed') {
+        await pool.query(`UPDATE orders SET payment_status = 'Paid' WHERE id = $1`, [order.id]);
+      }
+      created++;
+    } catch (err) {
+      errors.push({ row: i + 1, orderId: r.orderId || '(no order id)', error: err.message });
+    }
+  }
+
+  res.json({ created, errors });
+});
+
 module.exports = router;
