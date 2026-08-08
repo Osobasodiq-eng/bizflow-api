@@ -1,7 +1,7 @@
 // server.js
 const express = require('express');
 const cors = require('cors');
-const { router: authRouter, requireAuth } = require('./routes/auth');
+const { router: authRouter, requireAuth, requireAdmin } = require('./routes/auth');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -20,6 +20,10 @@ app.use('/api/orders', requireAuth, require('./routes/orders'));
 app.use('/api/customers', requireAuth, require('./routes/customers'));
 app.use('/api/products', requireAuth, require('./routes/inventory'));
 app.use('/api/payments', requireAuth, require('./routes/payments'));
+
+// Admin routes require BOTH a valid login AND being listed in ADMIN_EMAILS —
+// this is the one part of the API that can see across all businesses.
+app.use('/api/admin', requireAuth, requireAdmin, require('./routes/admin'));
 
 app.get('/', (req, res) => {
   res.json({ status: 'BizFlow API (multi-business) running' });

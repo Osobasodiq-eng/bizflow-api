@@ -47,7 +47,7 @@ router.post('/signup', async (req, res) => {
 
     await client.query('COMMIT');
 
-    const token = jwt.sign({ userId: user.id, businessId: business.id }, JWT_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ userId: user.id, businessId: business.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
     res.status(201).json({ token, business: { id: business.id, name: business.name }, email: user.email });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -76,7 +76,7 @@ router.post('/login', async (req, res) => {
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match) return res.status(401).json({ error: 'Invalid email or password' });
 
-    const token = jwt.sign({ userId: user.id, businessId: user.business_id }, JWT_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ userId: user.id, businessId: user.business_id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, business: { id: user.business_id, name: user.business_name }, email: user.email });
   } catch (err) {
     console.error('Login error:', err);
@@ -154,10 +154,23 @@ function requireAuth(req, res, next) {
     const payload = jwt.verify(token, JWT_SECRET);
     req.businessId = payload.businessId; // every downstream route uses this to scope queries
     req.userId = payload.userId;
+    req.userEmail = payload.email;
     next();
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 }
 
-module.exports = { router, requireAuth };
+// Admin check — deliberately simple: no separate admin login system, no
+// database column to manage. Whoever's email is listed in the ADMIN_EMAILS
+// environment variable (comma-separated) on Render is treated as the
+// platform owner. Must run AFTER requireAuth (needs req.userEmail set).
+function requireAdmin(req, res, next) {
+  const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+  if (!req.userEmail || !adminEmails.includes(req.userEmail.toLowerCase())) {
+    return res.status(403).json({ error: 'Admin access only' });
+  }
+  next();
+}
+
+module.exports = { router, requireAuth, requireAdmin };

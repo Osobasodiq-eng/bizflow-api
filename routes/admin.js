@@ -1,0 +1,67 @@
+// routes/admin.js
+// Platform-owner-only view across ALL businesses. Every query here
+// deliberately does NOT filter by business_id — that's the whole point,
+// this is the one place in the API that's allowed to see everything.
+// Access is gated by requireAdmin (see routes/auth.js) before any of
+// these handlers run.
+
+const express = require('express');
+const router = express.Router();
+const pool = require('../db/pool');
+
+// GET /api/admin/stats — platform-wide totals for the top of the dashboard
+router.get('/stats', async (req, res) => {
+  const [businesses, orders, revenue] = await Promise.all([
+    pool.query('SELECT COUNT(*) FROM businesses'),
+    pool.query('SELECT COUNT(*) FROM orders'),
+    pool.query(`SELECT COALESCE(SUM(amount), 0) AS total FROM orders WHERE payment_status = 'Paid'`),
+  ]);
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const newThisWeek = await pool.query('SELECT COUNT(*) FROM businesses WHERE created_at > $1', [weekAgo]);
+
+  res.json({
+    totalBusinesses: Number(businesses.rows[0].count),
+    newBusinessesThisWeek: Number(newThisWeek.rows[0].count),
+    totalOrders: Number(orders.rows[0].count),
+    totalRevenue: Number(revenue.rows[0].total),
+  });
+});
+
+// GET /api/admin/businesses — every business with real aggregate stats,
+// each computed live (not stored/cached) so it's always accurate
+router.get('/businesses', async (req, res) => {
+  const { rows: businesses } = await pool.query('SELECT * FROM businesses ORDER BY created_at DESC');
+
+  const withStats = await Promise.all(businesses.map(async (b) => {
+    const [users, products, customers, orders, revenue] = await Promise.all([
+      pool.query('SELECT email, created_at FROM users WHERE business_id = $1 ORDER BY created_at ASC LIMIT 1', [b.id]),
+      pool.query('SELECT COUNT(*) FROM products WHERE business_id = $1', [b.id]),
+      pool.query('SELECT COUNT(*) FROM customers WHERE business_id = $1', [b.id]),
+      pool.query('SELECT COUNT(*) FROM orders WHERE business_id = $1', [b.id]),
+      pool.query(`SELECT COALESCE(SUM(amount), 0) AS total FROM orders WHERE business_id = $1 AND payment_status = 'Paid'`, [b.id]),
+    ]);
+    return {
+      id: b.id,
+      name: b.name,
+      ownerEmail: users.rows[0]?.email || '(no user)',
+      createdAt: b.created_at,
+      productCount: Number(products.rows[0].count),
+      customerCount: Number(customers.rows[0].count),
+      orderCount: Number(orders.rows[0].count),
+      totalRevenue: Number(revenue.rows[0].total),
+    };
+  }));
+
+  res.json(withStats);
+});
+
+// DELETE /api/admin/businesses/:id — removes a business AND everything
+// under it (users, products, customers, orders, payments), thanks to
+// "ON DELETE CASCADE" on every foreign key in schema.sql
+router.delete('/businesses/:id', async (req, res) => {
+  const { rowCount } = await pool.query('DELETE FROM businesses WHERE id = $1', [req.params.id]);
+  if (!rowCount) return res.status(404).json({ error: 'Business not found' });
+  res.status(204).send();
+});
+
+module.exports = router;
