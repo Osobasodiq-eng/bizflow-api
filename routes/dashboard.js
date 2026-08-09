@@ -7,6 +7,9 @@ router.get('/summary', async (req, res) => {
   const businessId = req.businessId;
   const { rows: orders } = await pool.query('SELECT * FROM orders WHERE business_id = $1', [businessId]);
   const { rows: products } = await pool.query('SELECT quantity, threshold FROM products WHERE business_id = $1', [businessId]);
+  const { rows: payments } = await pool.query(
+    `SELECT order_id, amount FROM payments WHERE business_id = $1 AND status = 'Confirmed'`, [businessId]
+  );
 
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
@@ -16,14 +19,21 @@ router.get('/summary', async (req, res) => {
   const ordersYesterday = orders.filter(o => new Date(o.created_at) >= yesterday && new Date(o.created_at) < today);
   const revenueYesterday = ordersYesterday.filter(o => o.payment_status === 'Paid').reduce((s, o) => s + Number(o.amount), 0);
 
-  const unpaid = orders.filter(o => o.payment_status === 'Awaiting');
+  // Unpaid = real outstanding balance across Awaiting AND Partial orders,
+  // not the full order value — a partially-paid order only counts what's
+  // genuinely still owed.
+  const paidByOrder = {};
+  payments.forEach(p => { paidByOrder[p.order_id] = (paidByOrder[p.order_id] || 0) + Number(p.amount); });
+  const unpaid = orders.filter(o => o.payment_status === 'Awaiting' || o.payment_status === 'Partial');
+  const unpaidAmount = unpaid.reduce((s, o) => s + (Number(o.amount) - (paidByOrder[o.id] || 0)), 0);
+
   const lowStock = products.filter(p => p.quantity <= p.threshold).length;
 
   res.json({
     revenueToday,
     revenueChangePct: revenueYesterday > 0 ? Math.round(((revenueToday - revenueYesterday) / revenueYesterday) * 100) : null,
     ordersToday: ordersToday.length,
-    unpaidAmount: unpaid.reduce((s, o) => s + Number(o.amount), 0),
+    unpaidAmount,
     unpaidCount: unpaid.length,
     lowStockCount: lowStock,
   });

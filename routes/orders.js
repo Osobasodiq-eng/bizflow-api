@@ -46,7 +46,21 @@ router.get('/:idOrCode', async (req, res) => {
     [id, req.businessId]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
-  res.json(formatOrder(rows[0], rows[0].customer_name));
+
+  // Include how much has actually been paid so far, and what's left — this
+  // is what makes partial payments visible in the order detail view instead
+  // of just a binary Paid/Awaiting label.
+  const paidResult = await pool.query(
+    `SELECT COALESCE(SUM(amount), 0) AS total FROM payments WHERE order_id = $1 AND status = 'Confirmed'`,
+    [id]
+  );
+  const amountPaid = Number(paidResult.rows[0].total);
+
+  res.json({
+    ...formatOrder(rows[0], rows[0].customer_name),
+    amountPaid,
+    balanceRemaining: Math.max(0, Number(rows[0].amount) - amountPaid),
+  });
 });
 
 router.post('/', async (req, res) => {
