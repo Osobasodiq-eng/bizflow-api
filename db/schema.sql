@@ -77,8 +77,22 @@ CREATE TABLE IF NOT EXISTS payments (
   paid_at TIMESTAMPTZ
 );
 
+-- Money going OUT of the business — rent, transport, supplies, etc. Tracked
+-- separately from payments (money coming IN), so real profit (revenue minus
+-- expenses) can be computed instead of just showing raw sales.
+CREATE TABLE IF NOT EXISTS expenses (
+  id SERIAL PRIMARY KEY,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'Other',
+  amount NUMERIC NOT NULL,
+  expense_date TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Indexes so lookups scoped by business stay fast as data grows
 CREATE INDEX IF NOT EXISTS idx_products_business ON products(business_id);
 CREATE INDEX IF NOT EXISTS idx_customers_business ON customers(business_id);
 CREATE INDEX IF NOT EXISTS idx_orders_business ON orders(business_id);
 CREATE INDEX IF NOT EXISTS idx_payments_business ON payments(business_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_business ON expenses(business_id);
