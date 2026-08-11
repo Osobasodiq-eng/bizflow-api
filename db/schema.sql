@@ -90,9 +90,27 @@ CREATE TABLE IF NOT EXISTS expenses (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Audit trail of every stock quantity change — sales, manual edits, new
+-- stock added, imports, deletions. product_id is ON DELETE SET NULL (not
+-- CASCADE) so history survives even after a product is deleted; product_name
+-- is stored as a snapshot so old entries still make sense later.
+CREATE TABLE IF NOT EXISTS inventory_history (
+  id SERIAL PRIMARY KEY,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+  product_name TEXT NOT NULL,
+  change_type TEXT NOT NULL,
+  quantity_change INTEGER NOT NULL,
+  quantity_before INTEGER NOT NULL,
+  quantity_after INTEGER NOT NULL,
+  note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Indexes so lookups scoped by business stay fast as data grows
 CREATE INDEX IF NOT EXISTS idx_products_business ON products(business_id);
 CREATE INDEX IF NOT EXISTS idx_customers_business ON customers(business_id);
 CREATE INDEX IF NOT EXISTS idx_orders_business ON orders(business_id);
 CREATE INDEX IF NOT EXISTS idx_payments_business ON payments(business_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_business ON expenses(business_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_history_business ON inventory_history(business_id);

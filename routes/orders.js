@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
+const { logInventoryChange } = require('../db/inventoryLog');
 
 function formatOrder(row, customerName) {
   return {
@@ -83,6 +84,7 @@ router.post('/', async (req, res) => {
 
     let amount = 0;
     const orderItems = [];
+    const stockLogEntries = []; // collected here, written after the order gets a real ID below
     for (const item of items) {
       const prodResult = await client.query(
         'SELECT * FROM products WHERE id = $1 AND business_id = $2 FOR UPDATE',
@@ -95,6 +97,10 @@ router.post('/', async (req, res) => {
       await client.query('UPDATE products SET quantity = quantity - $1 WHERE id = $2', [item.qty, product.id]);
       amount += Number(product.price) * item.qty;
       orderItems.push({ productId: product.id, name: product.name, qty: item.qty });
+      stockLogEntries.push({
+        productId: product.id, productName: product.name,
+        quantityChange: -item.qty, quantityBefore: product.quantity, quantityAfter: product.quantity - item.qty,
+      });
     }
 
     const orderResult = await client.query(
@@ -102,6 +108,16 @@ router.post('/', async (req, res) => {
        VALUES ($1, $2, $3, $4, 'Awaiting', 'New', $5) RETURNING *`,
       [req.businessId, resolvedCustomerId, JSON.stringify(orderItems), amount, delivery || null]
     );
+    const newOrderId = orderResult.rows[0].id;
+
+    for (const entry of stockLogEntries) {
+      await logInventoryChange(client, {
+        businessId: req.businessId, productId: entry.productId, productName: entry.productName,
+        changeType: 'Sale', quantityChange: entry.quantityChange,
+        quantityBefore: entry.quantityBefore, quantityAfter: entry.quantityAfter,
+        note: `Order BF-${String(newOrderId).padStart(4, '0')}`,
+      });
+    }
 
     const custResult = await client.query('SELECT name FROM customers WHERE id = $1', [resolvedCustomerId]);
     await client.query('COMMIT');
@@ -188,11 +204,17 @@ router.post('/import', async (req, res) => {
       const amount = Number(product.price) * qty;
       const items = JSON.stringify([{ productId: product.id, name: product.name, qty }]);
 
-      await client.query(
+      const orderInsert = await client.query(
         `INSERT INTO orders (business_id, customer_id, items, amount, payment_status, status, delivery)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
         [req.businessId, customerId, items, amount, r.paymentStatus || 'Awaiting', r.status || 'New', r.delivery || null]
       );
+
+      await logInventoryChange(client, {
+        businessId: req.businessId, productId: product.id, productName: product.name,
+        changeType: 'Sale', quantityChange: -qty, quantityBefore: product.quantity, quantityAfter: product.quantity - qty,
+        note: `Order BF-${String(orderInsert.rows[0].id).padStart(4, '0')} (CSV import)`,
+      });
 
       await client.query('COMMIT');
       created++;
