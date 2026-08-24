@@ -12,6 +12,11 @@ app.use(express.json());
 // Auth routes are PUBLIC — you need to sign up / log in before you have a token
 app.use('/api/auth', authRouter);
 
+// Storefront routes are also PUBLIC — a buyer browsing a merchant's store
+// has no BizFlow login. Scoped by :businessId in the URL instead of a JWT;
+// see routes/public.js for how that stays safe.
+app.use('/api/public', require('./routes/public'));
+
 // Everything below this line requires a valid "Authorization: Bearer <token>"
 // header. requireAuth reads the token and sets req.businessId, which every
 // route file then uses to filter its SQL queries.
