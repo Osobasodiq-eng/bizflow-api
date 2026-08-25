@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS products (
   quantity INTEGER NOT NULL DEFAULT 0,
   threshold INTEGER NOT NULL DEFAULT 5,
   image_url TEXT,
+  description TEXT,
+  specifications JSONB NOT NULL DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -125,6 +127,8 @@ CREATE INDEX IF NOT EXISTS idx_inventory_history_business ON inventory_history(b
 -- without this column — running it again does nothing on a fresh install
 -- where the CREATE TABLE above already included it.
 ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS specifications JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 -- Added later: storefront customization (logo, banner, description, theme)
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS logo_url TEXT;
