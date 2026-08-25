@@ -41,7 +41,7 @@ router.get('/history', async (req, res) => {
 
 router.get('/', async (req, res) => {
   const { rows } = await pool.query(
-    'SELECT id, name, category, cost, price, quantity, threshold, image_url FROM products WHERE business_id = $1 ORDER BY id',
+    'SELECT id, name, category, cost, price, quantity, threshold, image_url, description, specifications FROM products WHERE business_id = $1 ORDER BY id',
     [req.businessId]
   );
   res.json(rows);
@@ -54,14 +54,15 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, cost, price, quantity, threshold, category, image_url } = req.body;
+  const { name, cost, price, quantity, threshold, category, image_url, description, specifications } = req.body;
   if (!name || cost == null || price == null) return res.status(400).json({ error: 'name, cost, and price are required' });
 
   const startQty = quantity ?? 0;
   const { rows } = await pool.query(
-    `INSERT INTO products (business_id, name, category, cost, price, quantity, threshold, image_url)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-    [req.businessId, name, category || 'Uncategorized', cost, price, startQty, threshold ?? 5, image_url || null]
+    `INSERT INTO products (business_id, name, category, cost, price, quantity, threshold, image_url, description, specifications)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+    [req.businessId, name, category || 'Uncategorized', cost, price, startQty, threshold ?? 5, image_url || null,
+     description || null, JSON.stringify(specifications || [])]
   );
   const product = rows[0];
 
@@ -75,7 +76,7 @@ router.post('/', async (req, res) => {
 });
 
 router.patch('/:id', async (req, res) => {
-  const fields = ['name', 'category', 'cost', 'price', 'quantity', 'threshold', 'image_url'];
+  const fields = ['name', 'category', 'cost', 'price', 'quantity', 'threshold', 'image_url', 'description', 'specifications'];
   const updates = fields.filter(f => req.body[f] !== undefined);
   if (!updates.length) return res.status(400).json({ error: 'No valid fields to update' });
 
@@ -86,7 +87,9 @@ router.patch('/:id', async (req, res) => {
   const quantityBefore = before.rows[0].quantity;
 
   const setClause = updates.map((f, i) => `${f} = $${i + 1}`).join(', ');
-  const values = updates.map(f => req.body[f]);
+  // specifications is a JSONB column — it needs to arrive as a JSON string,
+  // unlike every other plain text/number field here.
+  const values = updates.map(f => f === 'specifications' ? JSON.stringify(req.body[f]) : req.body[f]);
   const { rows } = await pool.query(
     `UPDATE products SET ${setClause} WHERE id = $${updates.length + 1} AND business_id = $${updates.length + 2} RETURNING *`,
     [...values, req.params.id, req.businessId]
