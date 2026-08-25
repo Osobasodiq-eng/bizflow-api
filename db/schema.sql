@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS products (
   price NUMERIC NOT NULL DEFAULT 0,
   quantity INTEGER NOT NULL DEFAULT 0,
   threshold INTEGER NOT NULL DEFAULT 5,
+  image_url TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -114,3 +115,9 @@ CREATE INDEX IF NOT EXISTS idx_orders_business ON orders(business_id);
 CREATE INDEX IF NOT EXISTS idx_payments_business ON payments(business_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_business ON expenses(business_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_history_business ON inventory_history(business_id);
+
+-- Added later: product photo links (ImageKit URLs). IF NOT EXISTS makes this
+-- safe to run against the live database, which already has a products table
+-- without this column — running it again does nothing on a fresh install
+-- where the CREATE TABLE above already included it.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;
