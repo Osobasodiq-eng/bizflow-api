@@ -41,7 +41,7 @@ router.get('/history', async (req, res) => {
 
 router.get('/', async (req, res) => {
   const { rows } = await pool.query(
-    'SELECT id, name, category, cost, price, quantity, threshold FROM products WHERE business_id = $1 ORDER BY id',
+    'SELECT id, name, category, cost, price, quantity, threshold, image_url FROM products WHERE business_id = $1 ORDER BY id',
     [req.businessId]
   );
   res.json(rows);
@@ -54,14 +54,14 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, cost, price, quantity, threshold, category } = req.body;
+  const { name, cost, price, quantity, threshold, category, image_url } = req.body;
   if (!name || cost == null || price == null) return res.status(400).json({ error: 'name, cost, and price are required' });
 
   const startQty = quantity ?? 0;
   const { rows } = await pool.query(
-    `INSERT INTO products (business_id, name, category, cost, price, quantity, threshold)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-    [req.businessId, name, category || 'Uncategorized', cost, price, startQty, threshold ?? 5]
+    `INSERT INTO products (business_id, name, category, cost, price, quantity, threshold, image_url)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    [req.businessId, name, category || 'Uncategorized', cost, price, startQty, threshold ?? 5, image_url || null]
   );
   const product = rows[0];
 
@@ -75,7 +75,7 @@ router.post('/', async (req, res) => {
 });
 
 router.patch('/:id', async (req, res) => {
-  const fields = ['name', 'category', 'cost', 'price', 'quantity', 'threshold'];
+  const fields = ['name', 'category', 'cost', 'price', 'quantity', 'threshold', 'image_url'];
   const updates = fields.filter(f => req.body[f] !== undefined);
   if (!updates.length) return res.status(400).json({ error: 'No valid fields to update' });
 
