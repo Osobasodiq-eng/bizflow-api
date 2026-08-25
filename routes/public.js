@@ -60,7 +60,7 @@ router.get('/:businessId/products', async (req, res) => {
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
   const { rows } = await pool.query(
-    'SELECT id, name, category, price, quantity, image_url FROM products WHERE business_id = $1 ORDER BY id',
+    'SELECT id, name, category, price, quantity, image_url, description, specifications FROM products WHERE business_id = $1 ORDER BY id',
     [businessId]
   );
   res.json(rows.map(p => ({
@@ -70,6 +70,8 @@ router.get('/:businessId/products', async (req, res) => {
     price: Number(p.price),
     inStock: p.quantity > 0,
     imageUrl: p.image_url || null,
+    description: p.description || null,
+    specifications: p.specifications || [],
   })));
 });
 
