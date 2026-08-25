@@ -34,9 +34,19 @@ router.get('/:businessId/store', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
-  const { rows } = await pool.query('SELECT id, name FROM businesses WHERE id = $1', [businessId]);
+  const { rows } = await pool.query(
+    'SELECT id, name, logo_url, banner_url, description, theme FROM businesses WHERE id = $1',
+    [businessId]
+  );
   if (!rows[0]) return res.status(404).json({ error: 'Store not found' });
-  res.json({ id: rows[0].id, name: rows[0].name });
+  res.json({
+    id: rows[0].id,
+    name: rows[0].name,
+    logoUrl: rows[0].logo_url,
+    bannerUrl: rows[0].banner_url,
+    description: rows[0].description,
+    theme: rows[0].theme,
+  });
 });
 
 // GET /api/public/:businessId/products
