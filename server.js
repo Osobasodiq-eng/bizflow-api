@@ -24,6 +24,7 @@ app.use('/api/dashboard', requireAuth, require('./routes/dashboard'));
 app.use('/api/orders', requireAuth, require('./routes/orders'));
 app.use('/api/customers', requireAuth, require('./routes/customers'));
 app.use('/api/products', requireAuth, require('./routes/inventory'));
+app.use('/api/imagekit', requireAuth, require('./routes/imagekit'));
 app.use('/api/payments', requireAuth, require('./routes/payments'));
 app.use('/api/expenses', requireAuth, require('./routes/expenses'));
 
