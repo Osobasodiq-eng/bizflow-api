@@ -13,7 +13,10 @@ const pool = require('../db/pool');
 // color picker. Keeping the list here (not just in the frontend) means the
 // backend can reject anything that isn't one of these, so a business can
 // never end up with a broken/unknown theme value.
-const VALID_THEMES = ['forest', 'midnight', 'rose', 'ocean'];
+const VALID_THEMES = [
+  'forest', 'midnight', 'rose', 'ocean',
+  'plum', 'amber', 'slate', 'terracotta', 'sage', 'noir',
+];
 
 router.get('/', async (req, res) => {
   const { rows } = await pool.query(
