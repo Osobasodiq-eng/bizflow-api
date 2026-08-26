@@ -63,4 +63,46 @@ router.delete('/:id', async (req, res) => {
   res.json({ deleted: true });
 });
 
+// POST /api/delivery-zones/import — bulk create from a CSV upload.
+// Matches the existing pattern used by products/customers/etc: takes a
+// { rows: [...] } array from the parsed CSV and reports how many succeeded
+// vs. any row-level errors, rather than failing the whole batch on one bad
+// row. A location name that already exists for this business gets its fee
+// UPDATED rather than creating a duplicate zone.
+router.post('/import', async (req, res) => {
+  const rows = req.body.rows;
+  if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'rows array is required' });
+
+  let created = 0;
+  let updated = 0;
+  const errors = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    try {
+      const location_name = (r.location_name || '').trim();
+      const fee = Number(r.fee);
+      if (!location_name) throw new Error('location_name is required');
+      if (isNaN(fee) || fee < 0) throw new Error('fee must be a number 0 or greater');
+
+      const existing = await pool.query(
+        'SELECT id FROM delivery_zones WHERE business_id = $1 AND location_name = $2',
+        [req.businessId, location_name]
+      );
+      if (existing.rows[0]) {
+        await pool.query('UPDATE delivery_zones SET fee = $1 WHERE id = $2', [fee, existing.rows[0].id]);
+        updated++;
+      } else {
+        await pool.query(
+          'INSERT INTO delivery_zones (business_id, location_name, fee) VALUES ($1, $2, $3)',
+          [req.businessId, location_name, fee]
+        );
+        created++;
+      }
+    } catch (err) {
+      errors.push({ row: i + 1, error: err.message });
+    }
+  }
+  res.json({ created: created + updated, failed: errors.length, errors });
+});
+
 module.exports = router;
