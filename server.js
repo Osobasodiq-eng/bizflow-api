@@ -27,6 +27,7 @@ app.use('/api/products', requireAuth, require('./routes/inventory'));
 app.use('/api/imagekit', requireAuth, require('./routes/imagekit'));
 app.use('/api/business', requireAuth, require('./routes/business'));
 app.use('/api/delivery-zones', requireAuth, require('./routes/delivery-zones'));
+app.use('/api/paystack', requireAuth, require('./routes/paystack'));
 app.use('/api/payments', requireAuth, require('./routes/payments'));
 app.use('/api/expenses', requireAuth, require('./routes/expenses'));
 
