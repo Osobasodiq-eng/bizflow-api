@@ -146,3 +146,10 @@ ALTER TABLE businesses ADD COLUMN IF NOT EXISTS banner_url TEXT;
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'forest';
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC NOT NULL DEFAULT 0;
+
+-- Paystack subaccount details, once a merchant links their bank account
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS paystack_subaccount_code TEXT;
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS paystack_bank_code TEXT;
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS paystack_bank_name TEXT;
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS paystack_account_number TEXT;
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS paystack_account_name TEXT;
