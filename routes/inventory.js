@@ -129,6 +129,17 @@ router.delete('/:id', async (req, res) => {
 // POST /import — bulk-create products from a parsed CSV. Each row is
 // processed independently so one bad row doesn't stop the whole file;
 // the response reports exactly what succeeded and what didn't.
+// Turns "Size:50ml|Material:Glass" into [{label:"Size",value:"50ml"}, ...].
+// Empty/malformed pieces are silently skipped rather than failing the row —
+// a typo in specs shouldn't block the whole product from importing.
+function parsePackedSpecs(raw) {
+  if (!raw) return [];
+  return raw.split('|').map(pair => {
+    const [label, ...rest] = pair.split(':');
+    return { label: (label || '').trim(), value: rest.join(':').trim() };
+  }).filter(s => s.label && s.value);
+}
+
 router.post('/import', async (req, res) => {
   const rows = req.body.rows;
   if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'rows array is required' });
@@ -141,9 +152,10 @@ router.post('/import', async (req, res) => {
       if (!r.name || r.cost == null || r.price == null) throw new Error('name, cost, and price are required');
       const qty = Number(r.quantity) || 0;
       const inserted = await pool.query(
-        `INSERT INTO products (business_id, name, category, cost, price, quantity, threshold)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-        [req.businessId, r.name, r.category || 'Uncategorized', Number(r.cost), Number(r.price), qty, Number(r.threshold) || 5]
+        `INSERT INTO products (business_id, name, category, cost, price, quantity, threshold, image_url, description, specifications)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        [req.businessId, r.name, r.category || 'Uncategorized', Number(r.cost), Number(r.price), qty, Number(r.threshold) || 5,
+         r.image_url || null, r.description || null, JSON.stringify(parsePackedSpecs(r.specifications))]
       );
       if (qty > 0) {
         await logInventoryChange(null, {
