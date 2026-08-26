@@ -35,7 +35,7 @@ router.get('/:businessId/store', async (req, res) => {
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
   const { rows } = await pool.query(
-    'SELECT id, name, logo_url, banner_url, description, theme FROM businesses WHERE id = $1',
+    'SELECT id, name, logo_url, banner_url, description, theme, delivery_fee FROM businesses WHERE id = $1',
     [businessId]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Store not found' });
@@ -46,6 +46,7 @@ router.get('/:businessId/store', async (req, res) => {
     bannerUrl: rows[0].banner_url,
     description: rows[0].description,
     theme: rows[0].theme,
+    deliveryFee: Number(rows[0].delivery_fee),
   });
 });
 
@@ -92,7 +93,7 @@ router.post('/:businessId/orders', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
-  const { customer, items, delivery } = req.body;
+  const { customer, items, delivery, deliveryMethod } = req.body;
   if (!items || !items.length) return res.status(400).json({ error: 'items are required' });
   if (!customer || !customer.name || !customer.phone) {
     return res.status(400).json({ error: 'customer name and phone are required' });
@@ -102,9 +103,15 @@ router.post('/:businessId/orders', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // Confirm the store actually exists before writing anything against it.
-    const bizCheck = await client.query('SELECT id FROM businesses WHERE id = $1', [businessId]);
+    // Confirm the store actually exists before writing anything against it,
+    // and grab its delivery fee while we're here.
+    const bizCheck = await client.query('SELECT id, delivery_fee FROM businesses WHERE id = $1', [businessId]);
     if (!bizCheck.rows[0]) throw { status: 404, message: 'Store not found' };
+    // Pickup orders never carry a delivery fee, regardless of what the
+    // business has configured — only charge it when the buyer actually
+    // chose delivery. Defaults to no fee if the field wasn't sent at all,
+    // so this never accidentally charges someone.
+    const deliveryFee = deliveryMethod === 'delivery' ? Number(bizCheck.rows[0].delivery_fee) : 0;
 
     const custResult = await client.query(
       `INSERT INTO customers (business_id, name, phone, location, tag) VALUES ($1, $2, $3, $4, 'New') RETURNING id`,
@@ -112,7 +119,7 @@ router.post('/:businessId/orders', async (req, res) => {
     );
     const resolvedCustomerId = custResult.rows[0].id;
 
-    let amount = 0;
+    let itemsTotal = 0;
     const orderItems = [];
     const stockLogEntries = [];
     for (const item of items) {
@@ -125,13 +132,14 @@ router.post('/:businessId/orders', async (req, res) => {
       if (product.quantity < item.qty) throw { status: 400, message: `Not enough stock for ${product.name}` };
 
       await client.query('UPDATE products SET quantity = quantity - $1 WHERE id = $2', [item.qty, product.id]);
-      amount += Number(product.price) * item.qty;
+      itemsTotal += Number(product.price) * item.qty;
       orderItems.push({ productId: product.id, name: product.name, qty: item.qty });
       stockLogEntries.push({
         productId: product.id, productName: product.name,
         quantityChange: -item.qty, quantityBefore: product.quantity, quantityAfter: product.quantity - item.qty,
       });
     }
+    const amount = itemsTotal + deliveryFee;
 
     const orderResult = await client.query(
       `INSERT INTO orders (business_id, customer_id, items, amount, payment_status, status, delivery)
@@ -152,6 +160,8 @@ router.post('/:businessId/orders', async (req, res) => {
     await client.query('COMMIT');
     res.status(201).json({
       id: `BF-${String(newOrderId).padStart(4, '0')}`,
+      itemsTotal,
+      deliveryFee,
       amount,
       items: orderItems,
       status: 'New',

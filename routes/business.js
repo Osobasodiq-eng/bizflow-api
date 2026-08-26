@@ -20,7 +20,7 @@ const VALID_THEMES = [
 
 router.get('/', async (req, res) => {
   const { rows } = await pool.query(
-    'SELECT id, name, logo_url, banner_url, description, theme FROM businesses WHERE id = $1',
+    'SELECT id, name, logo_url, banner_url, description, theme, delivery_fee FROM businesses WHERE id = $1',
     [req.businessId]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Business not found' });
@@ -28,16 +28,19 @@ router.get('/', async (req, res) => {
 });
 
 router.patch('/', async (req, res) => {
-  const { logo_url, banner_url, description, theme } = req.body;
+  const { logo_url, banner_url, description, theme, delivery_fee } = req.body;
 
   if (theme !== undefined && !VALID_THEMES.includes(theme)) {
     return res.status(400).json({ error: `theme must be one of: ${VALID_THEMES.join(', ')}` });
+  }
+  if (delivery_fee !== undefined && (isNaN(delivery_fee) || Number(delivery_fee) < 0)) {
+    return res.status(400).json({ error: 'delivery_fee must be a number 0 or greater' });
   }
 
   // Only update fields that were actually sent, same pattern as the
   // existing product PATCH route — a merchant can save just the logo
   // without accidentally wiping their description, for example.
-  const fields = { logo_url, banner_url, description, theme };
+  const fields = { logo_url, banner_url, description, theme, delivery_fee };
   const setParts = [];
   const values = [];
   let i = 1;
@@ -52,7 +55,7 @@ router.patch('/', async (req, res) => {
 
   values.push(req.businessId);
   const { rows } = await pool.query(
-    `UPDATE businesses SET ${setParts.join(', ')} WHERE id = $${i} RETURNING id, name, logo_url, banner_url, description, theme`,
+    `UPDATE businesses SET ${setParts.join(', ')} WHERE id = $${i} RETURNING id, name, logo_url, banner_url, description, theme, delivery_fee`,
     values
   );
   res.json(rows[0]);
