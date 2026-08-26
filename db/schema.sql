@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS businesses (
   banner_url TEXT,
   description TEXT,
   theme TEXT NOT NULL DEFAULT 'forest',
+  delivery_fee NUMERIC NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -135,3 +136,4 @@ ALTER TABLE businesses ADD COLUMN IF NOT EXISTS logo_url TEXT;
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS banner_url TEXT;
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'forest';
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC NOT NULL DEFAULT 0;
