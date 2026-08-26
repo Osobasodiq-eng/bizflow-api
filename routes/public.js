@@ -35,7 +35,7 @@ router.get('/:businessId/store', async (req, res) => {
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
   const { rows } = await pool.query(
-    'SELECT id, name, logo_url, banner_url, description, theme, delivery_fee FROM businesses WHERE id = $1',
+    'SELECT id, name, logo_url, banner_url, description, theme FROM businesses WHERE id = $1',
     [businessId]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Store not found' });
@@ -46,8 +46,21 @@ router.get('/:businessId/store', async (req, res) => {
     bannerUrl: rows[0].banner_url,
     description: rows[0].description,
     theme: rows[0].theme,
-    deliveryFee: Number(rows[0].delivery_fee),
   });
+});
+
+// GET /api/public/:businessId/delivery-zones
+// The list of locations this business delivers to, each with its own fee —
+// what the storefront's checkout shows for the buyer to pick from.
+router.get('/:businessId/delivery-zones', async (req, res) => {
+  const businessId = parseBusinessId(req.params.businessId);
+  if (!businessId) return res.status(404).json({ error: 'Store not found' });
+
+  const { rows } = await pool.query(
+    'SELECT id, location_name, fee FROM delivery_zones WHERE business_id = $1 ORDER BY id',
+    [businessId]
+  );
+  res.json(rows.map(z => ({ id: z.id, locationName: z.location_name, fee: Number(z.fee) })));
 });
 
 // GET /api/public/:businessId/products
@@ -93,7 +106,7 @@ router.post('/:businessId/orders', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
-  const { customer, items, delivery, deliveryMethod } = req.body;
+  const { customer, items, delivery, deliveryZoneId } = req.body;
   if (!items || !items.length) return res.status(400).json({ error: 'items are required' });
   if (!customer || !customer.name || !customer.phone) {
     return res.status(400).json({ error: 'customer name and phone are required' });
@@ -103,15 +116,22 @@ router.post('/:businessId/orders', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // Confirm the store actually exists before writing anything against it,
-    // and grab its delivery fee while we're here.
-    const bizCheck = await client.query('SELECT id, delivery_fee FROM businesses WHERE id = $1', [businessId]);
+    // Confirm the store actually exists before writing anything against it.
+    const bizCheck = await client.query('SELECT id FROM businesses WHERE id = $1', [businessId]);
     if (!bizCheck.rows[0]) throw { status: 404, message: 'Store not found' };
-    // Pickup orders never carry a delivery fee, regardless of what the
-    // business has configured — only charge it when the buyer actually
-    // chose delivery. Defaults to no fee if the field wasn't sent at all,
-    // so this never accidentally charges someone.
-    const deliveryFee = deliveryMethod === 'delivery' ? Number(bizCheck.rows[0].delivery_fee) : 0;
+
+    // No zone chosen at all = pickup, no fee. If a zone WAS chosen, it must
+    // actually belong to this business — never trust a fee amount from the
+    // client, only ever look it up ourselves.
+    let deliveryFee = 0;
+    if (deliveryZoneId) {
+      const zoneResult = await client.query(
+        'SELECT fee FROM delivery_zones WHERE id = $1 AND business_id = $2',
+        [deliveryZoneId, businessId]
+      );
+      if (!zoneResult.rows[0]) throw { status: 400, message: 'Selected delivery location is not valid for this store' };
+      deliveryFee = Number(zoneResult.rows[0].fee);
+    }
 
     const custResult = await client.query(
       `INSERT INTO customers (business_id, name, phone, location, tag) VALUES ($1, $2, $3, $4, 'New') RETURNING id`,
