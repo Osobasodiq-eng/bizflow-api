@@ -2,7 +2,7 @@
 //
 // PUBLIC storefront routes — deliberately NOT behind requireAuth.
 // A buyer browsing a merchant's storefront has no BizFlow login and never
-// should need one, so these two routes take the business as a URL param
+// should need one, so these routes take the business as a URL param
 // (:businessId) instead of reading it off a JWT the way every other route
 // file does.
 //
@@ -19,23 +19,106 @@ const router = express.Router();
 const pool = require('../db/pool');
 const { logInventoryChange } = require('../db/inventoryLog');
 
-// Small helper: turns the :businessId route param into a real integer, or
-// null if it's garbage. Every route below bails out early with a 404 if
-// this comes back null, instead of ever passing NaN into a SQL query.
 function parseBusinessId(raw) {
   const id = Number(raw);
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+async function paystackFetch(path, options = {}) {
+  const res = await fetch(`https://api.paystack.co${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  });
+  const data = await res.json();
+  if (!res.ok || data.status === false) {
+    throw new Error(data.message || 'Paystack request failed');
+  }
+  return data;
+}
+
+// Looks up a delivery zone's real fee — NEVER trust a fee amount sent by
+// the client, only ever look it up ourselves. Returns 0 for pickup (no
+// zone chosen at all).
+async function resolveDeliveryFee(client, businessId, deliveryZoneId) {
+  if (!deliveryZoneId) return 0;
+  const zoneResult = await client.query(
+    'SELECT fee FROM delivery_zones WHERE id = $1 AND business_id = $2',
+    [deliveryZoneId, businessId]
+  );
+  if (!zoneResult.rows[0]) throw { status: 400, message: 'Selected delivery location is not valid for this store' };
+  return Number(zoneResult.rows[0].fee);
+}
+
+// The actual "create an order" work — checks stock, decrements it, creates
+// the customer, inserts the order row, logs the inventory change. Shared by
+// both the manual "place order, seller confirms payment later" flow AND the
+// real-payment flow (called only after Paystack confirms money moved), so
+// an order created either way ends up identical in the database.
+async function createOrderFromItems(client, { businessId, customer, items, delivery, deliveryFee, paymentStatus, paystackReference }) {
+  const custResult = await client.query(
+    `INSERT INTO customers (business_id, name, phone, location, tag) VALUES ($1, $2, $3, $4, 'New') RETURNING id`,
+    [businessId, customer.name, customer.phone, customer.location || 'Unknown']
+  );
+  const resolvedCustomerId = custResult.rows[0].id;
+
+  let itemsTotal = 0;
+  const orderItems = [];
+  const stockLogEntries = [];
+  for (const item of items) {
+    const prodResult = await client.query(
+      'SELECT * FROM products WHERE id = $1 AND business_id = $2 FOR UPDATE',
+      [item.productId, businessId]
+    );
+    const product = prodResult.rows[0];
+    if (!product) throw { status: 400, message: `Unknown productId ${item.productId}` };
+    if (product.quantity < item.qty) throw { status: 400, message: `Not enough stock for ${product.name}` };
+
+    await client.query('UPDATE products SET quantity = quantity - $1 WHERE id = $2', [item.qty, product.id]);
+    itemsTotal += Number(product.price) * item.qty;
+    orderItems.push({ productId: product.id, name: product.name, qty: item.qty, price: Number(product.price) });
+    stockLogEntries.push({
+      productId: product.id, productName: product.name,
+      quantityChange: -item.qty, quantityBefore: product.quantity, quantityAfter: product.quantity - item.qty,
+    });
+  }
+  const amount = itemsTotal + deliveryFee;
+
+  const orderResult = await client.query(
+    `INSERT INTO orders (business_id, customer_id, items, amount, payment_status, status, delivery, paystack_reference)
+     VALUES ($1, $2, $3, $4, $5, 'New', $6, $7) RETURNING *`,
+    [businessId, resolvedCustomerId, JSON.stringify(orderItems), amount, paymentStatus, delivery || null, paystackReference || null]
+  );
+  const newOrderId = orderResult.rows[0].id;
+
+  for (const entry of stockLogEntries) {
+    await logInventoryChange(client, {
+      businessId, productId: entry.productId, productName: entry.productName,
+      changeType: 'Sale', quantityChange: entry.quantityChange,
+      quantityBefore: entry.quantityBefore, quantityAfter: entry.quantityAfter,
+      note: `Storefront order BF-${String(newOrderId).padStart(4, '0')}`,
+    });
+  }
+
+  return {
+    id: `BF-${String(newOrderId).padStart(4, '0')}`,
+    itemsTotal, deliveryFee, amount,
+    items: orderItems,
+    status: 'New',
+    paymentStatus,
+  };
+}
+
 // GET /api/public/:businessId/store
-// Basic storefront header info (business name) — lets the storefront show
-// "You're shopping at {name}" without needing that hardcoded client-side.
 router.get('/:businessId/store', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
   const { rows } = await pool.query(
-    'SELECT id, name, logo_url, banner_url, description, theme FROM businesses WHERE id = $1',
+    'SELECT id, name, logo_url, banner_url, description, theme, paystack_subaccount_code FROM businesses WHERE id = $1',
     [businessId]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Store not found' });
@@ -46,12 +129,13 @@ router.get('/:businessId/store', async (req, res) => {
     bannerUrl: rows[0].banner_url,
     description: rows[0].description,
     theme: rows[0].theme,
+    // Tells the storefront whether to show a real "Pay now" checkout or
+    // fall back to the manual "place order, seller confirms payment" flow.
+    paymentsEnabled: !!rows[0].paystack_subaccount_code,
   });
 });
 
 // GET /api/public/:businessId/delivery-zones
-// The list of locations this business delivers to, each with its own fee —
-// what the storefront's checkout shows for the buyer to pick from.
 router.get('/:businessId/delivery-zones', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
@@ -64,11 +148,6 @@ router.get('/:businessId/delivery-zones', async (req, res) => {
 });
 
 // GET /api/public/:businessId/products
-// Read-only catalog for buyers. Deliberately returns FEWER fields than the
-// authenticated GET /api/products — cost price and low-stock threshold are
-// internal business numbers a buyer has no reason to see. Out-of-stock
-// products are included (with quantity: 0) rather than hidden, so the
-// storefront can grey them out instead of just not mentioning them.
 router.get('/:businessId/products', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
@@ -90,18 +169,10 @@ router.get('/:businessId/products', async (req, res) => {
 });
 
 // POST /api/public/:businessId/orders
-// Same shape and same underlying logic as the authenticated POST
-// /api/orders (stock check, stock decrement, inventory log, customer
-// lookup/creation) — just scoped by the :businessId param instead of
-// req.businessId from a JWT. A storefront order and a manually-created
-// "+ New Order" both end up as ordinary rows in the same orders table, so
-// they show up in the BizFlow dashboard identically.
-//
-// Body: { items: [{ productId, qty }], customer: { name, phone, location },
-//          delivery }
-// (customerId is intentionally NOT accepted here — a public buyer should
-// never be able to attach an order to an existing customer record just by
-// guessing an id; every storefront order creates its own customer.)
+// The ORIGINAL manual flow: creates the order immediately, payment status
+// "Awaiting", seller confirms payment themselves later. Kept working
+// unchanged for any store that hasn't linked a bank account yet — real
+// payment (below) only kicks in once a merchant connects one.
 router.post('/:businessId/orders', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
@@ -115,83 +186,144 @@ router.post('/:businessId/orders', async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
-    // Confirm the store actually exists before writing anything against it.
     const bizCheck = await client.query('SELECT id FROM businesses WHERE id = $1', [businessId]);
     if (!bizCheck.rows[0]) throw { status: 404, message: 'Store not found' };
 
-    // No zone chosen at all = pickup, no fee. If a zone WAS chosen, it must
-    // actually belong to this business — never trust a fee amount from the
-    // client, only ever look it up ourselves.
-    let deliveryFee = 0;
-    if (deliveryZoneId) {
-      const zoneResult = await client.query(
-        'SELECT fee FROM delivery_zones WHERE id = $1 AND business_id = $2',
-        [deliveryZoneId, businessId]
-      );
-      if (!zoneResult.rows[0]) throw { status: 400, message: 'Selected delivery location is not valid for this store' };
-      deliveryFee = Number(zoneResult.rows[0].fee);
-    }
-
-    const custResult = await client.query(
-      `INSERT INTO customers (business_id, name, phone, location, tag) VALUES ($1, $2, $3, $4, 'New') RETURNING id`,
-      [businessId, customer.name, customer.phone, customer.location || 'Unknown']
-    );
-    const resolvedCustomerId = custResult.rows[0].id;
-
-    let itemsTotal = 0;
-    const orderItems = [];
-    const stockLogEntries = [];
-    for (const item of items) {
-      const prodResult = await client.query(
-        'SELECT * FROM products WHERE id = $1 AND business_id = $2 FOR UPDATE',
-        [item.productId, businessId]
-      );
-      const product = prodResult.rows[0];
-      if (!product) throw { status: 400, message: `Unknown productId ${item.productId}` };
-      if (product.quantity < item.qty) throw { status: 400, message: `Not enough stock for ${product.name}` };
-
-      await client.query('UPDATE products SET quantity = quantity - $1 WHERE id = $2', [item.qty, product.id]);
-      itemsTotal += Number(product.price) * item.qty;
-      orderItems.push({ productId: product.id, name: product.name, qty: item.qty });
-      stockLogEntries.push({
-        productId: product.id, productName: product.name,
-        quantityChange: -item.qty, quantityBefore: product.quantity, quantityAfter: product.quantity - item.qty,
-      });
-    }
-    const amount = itemsTotal + deliveryFee;
-
-    const orderResult = await client.query(
-      `INSERT INTO orders (business_id, customer_id, items, amount, payment_status, status, delivery)
-       VALUES ($1, $2, $3, $4, 'Awaiting', 'New', $5) RETURNING *`,
-      [businessId, resolvedCustomerId, JSON.stringify(orderItems), amount, delivery || null]
-    );
-    const newOrderId = orderResult.rows[0].id;
-
-    for (const entry of stockLogEntries) {
-      await logInventoryChange(client, {
-        businessId, productId: entry.productId, productName: entry.productName,
-        changeType: 'Sale', quantityChange: entry.quantityChange,
-        quantityBefore: entry.quantityBefore, quantityAfter: entry.quantityAfter,
-        note: `Storefront order BF-${String(newOrderId).padStart(4, '0')}`,
-      });
-    }
+    const deliveryFee = await resolveDeliveryFee(client, businessId, deliveryZoneId);
+    const result = await createOrderFromItems(client, {
+      businessId, customer, items, delivery, deliveryFee, paymentStatus: 'Awaiting',
+    });
 
     await client.query('COMMIT');
-    res.status(201).json({
-      id: `BF-${String(newOrderId).padStart(4, '0')}`,
-      itemsTotal,
-      deliveryFee,
-      amount,
-      items: orderItems,
-      status: 'New',
-      paymentStatus: 'Awaiting',
-    });
+    res.status(201).json(result);
   } catch (err) {
     await client.query('ROLLBACK');
     const status = err.status || 500;
     console.error('Storefront order creation error:', err);
     res.status(status).json({ error: err.message || 'Could not create order' });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /api/public/:businessId/checkout/initialize
+// Starts a REAL Paystack payment. Does NOT touch stock or create anything
+// yet — that only happens once the payment is verified as successful
+// (below). This just returns a link for the buyer to actually pay at.
+router.post('/:businessId/checkout/initialize', async (req, res) => {
+  const businessId = parseBusinessId(req.params.businessId);
+  if (!businessId) return res.status(404).json({ error: 'Store not found' });
+
+  const { customer, items, delivery, deliveryZoneId, callbackUrl } = req.body;
+  if (!items || !items.length) return res.status(400).json({ error: 'items are required' });
+  if (!customer || !customer.name || !customer.phone || !customer.email) {
+    return res.status(400).json({ error: 'customer name, phone, and email are required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    const bizResult = await client.query(
+      'SELECT id, paystack_subaccount_code FROM businesses WHERE id = $1', [businessId]
+    );
+    const business = bizResult.rows[0];
+    if (!business) return res.status(404).json({ error: 'Store not found' });
+    if (!business.paystack_subaccount_code) {
+      return res.status(400).json({ error: 'This store has not set up payments yet' });
+    }
+
+    const deliveryFee = await resolveDeliveryFee(client, businessId, deliveryZoneId);
+
+    // Check stock is AVAILABLE without decrementing it yet — we don't want
+    // to hold stock hostage for a payment that might never complete. Real
+    // decrement happens at verify time, right before the order is created.
+    let itemsTotal = 0;
+    for (const item of items) {
+      const prodResult = await client.query('SELECT price, quantity, name FROM products WHERE id = $1 AND business_id = $2', [item.productId, businessId]);
+      const product = prodResult.rows[0];
+      if (!product) return res.status(400).json({ error: `Unknown productId ${item.productId}` });
+      if (product.quantity < item.qty) return res.status(400).json({ error: `Not enough stock for ${product.name}` });
+      itemsTotal += Number(product.price) * item.qty;
+    }
+    const amount = itemsTotal + deliveryFee;
+
+    const paystackRes = await paystackFetch('/transaction/initialize', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: customer.email,
+        amount: Math.round(amount * 100), // Paystack expects kobo, not naira
+        subaccount: business.paystack_subaccount_code,
+        callback_url: callbackUrl || undefined,
+        metadata: { businessId, customer, items, delivery, deliveryZoneId },
+      }),
+    });
+
+    res.json({ authorizationUrl: paystackRes.data.authorization_url, reference: paystackRes.data.reference });
+  } catch (err) {
+    console.error('Checkout initialize error:', err);
+    res.status(400).json({ error: err.message || 'Could not start payment' });
+  } finally {
+    client.release();
+  }
+});
+
+// GET /api/public/:businessId/checkout/verify/:reference
+// Called after the buyer is redirected back from Paystack. Verifies the
+// payment DIRECTLY with Paystack (never trusts the redirect alone — a
+// buyer could reach this URL without ever actually paying), and only THEN
+// creates the real order. Safe to call more than once for the same
+// reference (e.g. a page reload) — returns the existing order instead of
+// creating a duplicate.
+router.get('/:businessId/checkout/verify/:reference', async (req, res) => {
+  const businessId = parseBusinessId(req.params.businessId);
+  if (!businessId) return res.status(404).json({ error: 'Store not found' });
+  const { reference } = req.params;
+
+  const client = await pool.connect();
+  try {
+    // Already processed this reference? Return the same result instead of
+    // creating a second order for the same payment.
+    const existing = await client.query(
+      'SELECT id, items, amount, payment_status FROM orders WHERE paystack_reference = $1 AND business_id = $2',
+      [reference, businessId]
+    );
+    if (existing.rows[0]) {
+      const o = existing.rows[0];
+      return res.json({
+        id: `BF-${String(o.id).padStart(4, '0')}`, amount: Number(o.amount),
+        items: o.items, status: 'New', paymentStatus: o.payment_status, alreadyProcessed: true,
+      });
+    }
+
+    const verifyRes = await paystackFetch(`/transaction/verify/${encodeURIComponent(reference)}`);
+    if (verifyRes.data.status !== 'success') {
+      return res.status(400).json({ error: 'Payment was not successful' });
+    }
+
+    const meta = verifyRes.data.metadata;
+    if (!meta || Number(meta.businessId) !== businessId) {
+      return res.status(400).json({ error: 'This payment does not belong to this store' });
+    }
+
+    await client.query('BEGIN');
+    const deliveryFee = await resolveDeliveryFee(client, businessId, meta.deliveryZoneId);
+    const result = await createOrderFromItems(client, {
+      businessId, customer: meta.customer, items: meta.items, delivery: meta.delivery,
+      deliveryFee, paymentStatus: 'Paid', paystackReference: reference,
+    });
+
+    // Defense in depth: confirm what we actually charged for matches what
+    // Paystack actually collected, in case of a rare race condition (e.g.
+    // stock/price changed between initialize and verify).
+    if (Math.round(result.amount * 100) !== verifyRes.data.amount) {
+      console.error(`Amount mismatch on reference ${reference}: expected ${result.amount * 100}, Paystack charged ${verifyRes.data.amount}`);
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json(result);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Checkout verify error:', err);
+    res.status(400).json({ error: err.message || 'Could not verify payment' });
   } finally {
     client.release();
   }
