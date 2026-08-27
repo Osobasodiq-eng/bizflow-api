@@ -153,3 +153,8 @@ ALTER TABLE businesses ADD COLUMN IF NOT EXISTS paystack_bank_code TEXT;
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS paystack_bank_name TEXT;
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS paystack_account_number TEXT;
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS paystack_account_name TEXT;
+
+-- Set once a Paystack payment for this order is verified, so we never
+-- accidentally create the same order twice (e.g. buyer reloads the
+-- confirmation page after paying)
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS paystack_reference TEXT UNIQUE;
