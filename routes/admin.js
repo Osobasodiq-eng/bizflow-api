@@ -64,4 +64,39 @@ router.delete('/businesses/:id', async (req, res) => {
   res.status(204).send();
 });
 
-module.exports = router;
+module.exports = router;// GET /api/admin/timeseries?days=30 — daily order count + revenue,
+// platform-wide, for accurate day-by-day trend charts
+router.get('/timeseries', async (req, res) => {
+  const days = Math.min(Number(req.query.days) || 30, 90);
+  const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const { rows } = await pool.query(
+    `SELECT
+       date_trunc('day', created_at) AS day,
+       COUNT(*) AS order_count,
+       COALESCE(SUM(amount) FILTER (WHERE payment_status = 'Paid'), 0) AS revenue
+     FROM orders
+     WHERE created_at > $1
+     GROUP BY day
+     ORDER BY day ASC`,
+    [start]
+  );
+
+  // Fill in days with zero orders so the chart has no gaps
+  const byDay = new Map(rows.map(r => [r.day.toISOString().slice(0, 10), r]));
+  const series = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    const row = byDay.get(key);
+    series.push({
+      date: key,
+      orderCount: row ? Number(row.order_count) : 0,
+      revenue: row ? Number(row.revenue) : 0,
+    });
+  }
+
+  res.json(series);
+});
