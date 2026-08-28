@@ -94,6 +94,18 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
   );
   const newOrderId = orderResult.rows[0].id;
 
+  // Only real, confirmed payments get a row in `payments` — the manual
+  // "Awaiting" flow legitimately has no money yet, so nothing to record
+  // there (mark-paid, elsewhere, is what creates that row once the seller
+  // confirms it themselves).
+  if (paymentStatus === 'Paid' && paystackReference) {
+    await client.query(
+      `INSERT INTO payments (business_id, order_id, customer_id, amount, method, ref, status, paid_at)
+       VALUES ($1, $2, $3, $4, 'Paystack', $5, 'Confirmed', now())`,
+      [businessId, newOrderId, resolvedCustomerId, amount, paystackReference]
+    );
+  }
+
   for (const entry of stockLogEntries) {
     await logInventoryChange(client, {
       businessId, productId: entry.productId, productName: entry.productName,
