@@ -171,4 +171,88 @@ router.post('/import', async (req, res) => {
   res.json({ created, errors });
 });
 
+// --- Product variants (e.g. shoe sizes) — each variant has its OWN price
+// and quantity, independent of the parent product and of every other
+// variant. Whenever a variant's stock changes, the parent product's own
+// `quantity` column is recomputed as the sum of all its variants — this
+// keeps every existing feature that reads product.quantity (low-stock
+// alerts, CSV export, the Inventory table) working correctly without
+// needing to know variants exist at all.
+async function recomputeProductQuantity(productId) {
+  await pool.query(
+    `UPDATE products SET quantity = (
+       SELECT COALESCE(SUM(quantity), 0) FROM product_variants WHERE product_id = $1
+     ) WHERE id = $1`,
+    [productId]
+  );
+}
+
+router.get('/:productId/variants', async (req, res) => {
+  const product = await pool.query('SELECT id FROM products WHERE id = $1 AND business_id = $2', [req.params.productId, req.businessId]);
+  if (!product.rows[0]) return res.status(404).json({ error: 'Product not found' });
+
+  const { rows } = await pool.query(
+    'SELECT id, label, price, quantity FROM product_variants WHERE product_id = $1 ORDER BY id',
+    [req.params.productId]
+  );
+  res.json(rows);
+});
+
+router.post('/:productId/variants', async (req, res) => {
+  const { label, price, quantity } = req.body;
+  if (!label || !label.trim()) return res.status(400).json({ error: 'label is required (e.g. "Size 43")' });
+  if (price == null || isNaN(price) || Number(price) < 0) return res.status(400).json({ error: 'price must be a number 0 or greater' });
+  if (quantity == null || isNaN(quantity) || Number(quantity) < 0) return res.status(400).json({ error: 'quantity must be a number 0 or greater' });
+
+  const product = await pool.query('SELECT id FROM products WHERE id = $1 AND business_id = $2', [req.params.productId, req.businessId]);
+  if (!product.rows[0]) return res.status(404).json({ error: 'Product not found' });
+
+  const { rows } = await pool.query(
+    'INSERT INTO product_variants (product_id, business_id, label, price, quantity) VALUES ($1, $2, $3, $4, $5) RETURNING id, label, price, quantity',
+    [req.params.productId, req.businessId, label.trim(), price, quantity]
+  );
+  await recomputeProductQuantity(req.params.productId);
+  res.status(201).json(rows[0]);
+});
+
+router.patch('/variants/:variantId', async (req, res) => {
+  const { label, price, quantity } = req.body;
+  const fields = [];
+  const values = [];
+  let i = 1;
+
+  if (label !== undefined) {
+    if (!label.trim()) return res.status(400).json({ error: 'label cannot be empty' });
+    fields.push(`label = $${i++}`); values.push(label.trim());
+  }
+  if (price !== undefined) {
+    if (isNaN(price) || Number(price) < 0) return res.status(400).json({ error: 'price must be a number 0 or greater' });
+    fields.push(`price = $${i++}`); values.push(price);
+  }
+  if (quantity !== undefined) {
+    if (isNaN(quantity) || Number(quantity) < 0) return res.status(400).json({ error: 'quantity must be a number 0 or greater' });
+    fields.push(`quantity = $${i++}`); values.push(quantity);
+  }
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  values.push(req.params.variantId, req.businessId);
+  const { rows } = await pool.query(
+    `UPDATE product_variants SET ${fields.join(', ')} WHERE id = $${i} AND business_id = $${i + 1} RETURNING id, product_id, label, price, quantity`,
+    values
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Variant not found' });
+  await recomputeProductQuantity(rows[0].product_id);
+  res.json(rows[0]);
+});
+
+router.delete('/variants/:variantId', async (req, res) => {
+  const { rows } = await pool.query(
+    'DELETE FROM product_variants WHERE id = $1 AND business_id = $2 RETURNING product_id',
+    [req.params.variantId, req.businessId]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Variant not found' });
+  await recomputeProductQuantity(rows[0].product_id);
+  res.json({ deleted: true });
+});
+
 module.exports = router;

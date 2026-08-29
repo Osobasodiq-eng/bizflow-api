@@ -68,6 +68,7 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
   let itemsTotal = 0;
   const orderItems = [];
   const stockLogEntries = [];
+  const touchedProductIds = new Set(); // products whose variant stock changed — need their total resynced after
   for (const item of items) {
     const prodResult = await client.query(
       'SELECT * FROM products WHERE id = $1 AND business_id = $2 FOR UPDATE',
@@ -75,16 +76,52 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
     );
     const product = prodResult.rows[0];
     if (!product) throw { status: 400, message: `Unknown productId ${item.productId}` };
-    if (product.quantity < item.qty) throw { status: 400, message: `Not enough stock for ${product.name}` };
 
-    await client.query('UPDATE products SET quantity = quantity - $1 WHERE id = $2', [item.qty, product.id]);
-    itemsTotal += Number(product.price) * item.qty;
-    orderItems.push({ productId: product.id, name: product.name, qty: item.qty, price: Number(product.price) });
-    stockLogEntries.push({
-      productId: product.id, productName: product.name,
-      quantityChange: -item.qty, quantityBefore: product.quantity, quantityAfter: product.quantity - item.qty,
+    let unitPrice = Number(product.price);
+    let variantLabel = null;
+
+    if (item.variantId) {
+      const variantResult = await client.query(
+        'SELECT * FROM product_variants WHERE id = $1 AND product_id = $2 AND business_id = $3 FOR UPDATE',
+        [item.variantId, product.id, businessId]
+      );
+      const variant = variantResult.rows[0];
+      if (!variant) throw { status: 400, message: `Selected size is not valid for ${product.name}` };
+      if (variant.quantity < item.qty) throw { status: 400, message: `Not enough stock for ${product.name} (${variant.label})` };
+
+      await client.query('UPDATE product_variants SET quantity = quantity - $1 WHERE id = $2', [item.qty, variant.id]);
+      touchedProductIds.add(product.id);
+      unitPrice = Number(variant.price);
+      variantLabel = variant.label;
+      stockLogEntries.push({
+        productId: product.id, productName: `${product.name} (${variant.label})`,
+        quantityChange: -item.qty, quantityBefore: variant.quantity, quantityAfter: variant.quantity - item.qty,
+      });
+    } else {
+      if (product.quantity < item.qty) throw { status: 400, message: `Not enough stock for ${product.name}` };
+      await client.query('UPDATE products SET quantity = quantity - $1 WHERE id = $2', [item.qty, product.id]);
+      stockLogEntries.push({
+        productId: product.id, productName: product.name,
+        quantityChange: -item.qty, quantityBefore: product.quantity, quantityAfter: product.quantity - item.qty,
+      });
+    }
+
+    itemsTotal += unitPrice * item.qty;
+    orderItems.push({
+      productId: product.id, name: product.name, qty: item.qty, price: unitPrice,
+      variantId: item.variantId || null, variantLabel,
     });
   }
+
+  // Keep each touched product's total quantity column correct (sum of its
+  // variants) — same recompute the dashboard's variant routes do.
+  for (const productId of touchedProductIds) {
+    await client.query(
+      `UPDATE products SET quantity = (SELECT COALESCE(SUM(quantity), 0) FROM product_variants WHERE product_id = $1) WHERE id = $1`,
+      [productId]
+    );
+  }
+
   const amount = itemsTotal + deliveryFee;
 
   const orderResult = await client.query(
@@ -168,16 +205,32 @@ router.get('/:businessId/products', async (req, res) => {
     'SELECT id, name, category, price, quantity, image_url, description, specifications FROM products WHERE business_id = $1 ORDER BY id',
     [businessId]
   );
-  res.json(rows.map(p => ({
-    id: p.id,
-    name: p.name,
-    category: p.category,
-    price: Number(p.price),
-    inStock: p.quantity > 0,
-    imageUrl: p.image_url || null,
-    description: p.description || null,
-    specifications: p.specifications || [],
-  })));
+  const variantRows = await pool.query(
+    'SELECT id, product_id, label, price, quantity FROM product_variants WHERE business_id = $1 ORDER BY id',
+    [businessId]
+  );
+  const variantsByProduct = {};
+  for (const v of variantRows.rows) {
+    (variantsByProduct[v.product_id] ||= []).push({ id: v.id, label: v.label, price: Number(v.price), inStock: v.quantity > 0 });
+  }
+
+  res.json(rows.map(p => {
+    const variants = variantsByProduct[p.id] || [];
+    return {
+      id: p.id,
+      name: p.name,
+      category: p.category,
+      price: Number(p.price),
+      // A product with variants is only "in stock" overall if at least one
+      // size/variant actually has stock — the base quantity column is kept
+      // in sync as a sum, but inStock should reflect real buyable state.
+      inStock: variants.length ? variants.some(v => v.inStock) : p.quantity > 0,
+      imageUrl: p.image_url || null,
+      description: p.description || null,
+      specifications: p.specifications || [],
+      variants,
+    };
+  }));
 });
 
 // POST /api/public/:businessId/orders
@@ -253,8 +306,17 @@ router.post('/:businessId/checkout/initialize', async (req, res) => {
       const prodResult = await client.query('SELECT price, quantity, name FROM products WHERE id = $1 AND business_id = $2', [item.productId, businessId]);
       const product = prodResult.rows[0];
       if (!product) return res.status(400).json({ error: `Unknown productId ${item.productId}` });
-      if (product.quantity < item.qty) return res.status(400).json({ error: `Not enough stock for ${product.name}` });
-      itemsTotal += Number(product.price) * item.qty;
+
+      if (item.variantId) {
+        const variantResult = await client.query('SELECT price, quantity, label FROM product_variants WHERE id = $1 AND product_id = $2 AND business_id = $3', [item.variantId, item.productId, businessId]);
+        const variant = variantResult.rows[0];
+        if (!variant) return res.status(400).json({ error: `Selected size is not valid for ${product.name}` });
+        if (variant.quantity < item.qty) return res.status(400).json({ error: `Not enough stock for ${product.name} (${variant.label})` });
+        itemsTotal += Number(variant.price) * item.qty;
+      } else {
+        if (product.quantity < item.qty) return res.status(400).json({ error: `Not enough stock for ${product.name}` });
+        itemsTotal += Number(product.price) * item.qty;
+      }
     }
     const amount = itemsTotal + deliveryFee;
 
