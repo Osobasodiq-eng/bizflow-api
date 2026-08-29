@@ -129,8 +129,6 @@ router.get('/businesses', async (req, res) => {
       orderCount: Number(orders.rows[0].count),
       totalRevenue: Number(revenue.rows[0].total),
     };
-  }));
-
   res.json(withStats);
 });
 
