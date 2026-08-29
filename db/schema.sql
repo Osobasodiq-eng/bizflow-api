@@ -60,6 +60,18 @@ CREATE TABLE IF NOT EXISTS delivery_zones (
 );
 CREATE INDEX IF NOT EXISTS idx_delivery_zones_business ON delivery_zones(business_id);
 
+CREATE TABLE IF NOT EXISTS product_variants (
+  id SERIAL PRIMARY KEY,
+  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  price NUMERIC NOT NULL DEFAULT 0,
+  quantity INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_product_variants_product ON product_variants(product_id);
+CREATE INDEX IF NOT EXISTS idx_product_variants_business ON product_variants(business_id);
+
 CREATE TABLE IF NOT EXISTS customers (
   id SERIAL PRIMARY KEY,
   business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
