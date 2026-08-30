@@ -42,6 +42,13 @@ router.get('/history', async (req, res) => {
 // DELETE /all -> wipes every product for this business.
 // Must be declared BEFORE DELETE /:id, or Express will treat "all"
 // as an :id value. Same reasoning as GET /history above.
+//
+// IMPORTANT: the history-logging step below runs all inserts in PARALLEL
+// (Promise.all) instead of one-at-a-time in a loop. With hundreds of
+// products, logging them sequentially can take long enough that Render's
+// gateway times out and returns a 502 "Bad Gateway" / "Failed to fetch" —
+// even though the delete itself already succeeded. Running them in
+// parallel keeps this fast regardless of how many products there are.
 router.delete('/all', async (req, res) => {
   const client = await pool.connect();
   try {
@@ -51,6 +58,7 @@ router.delete('/all', async (req, res) => {
     );
 
     if (!rows.length) {
+      client.release(); // release even on this early-return path — this was missing before and leaked a connection
       return res.json({ deleted: 0 });
     }
 
@@ -62,26 +70,25 @@ router.delete('/all', async (req, res) => {
     await client.query('DELETE FROM products WHERE business_id = $1', [req.businessId]);
 
     await client.query('COMMIT');
+    client.release(); // release right after commit — we don't need this specific client for the logging step below
 
     // Log one history entry per product that had stock, same shape as the
     // single-product delete route, so the audit trail isn't silently
-    // missing a bulk wipe. Done after commit since it's a separate concern.
-    for (const p of rows) {
-      if (p.quantity > 0) {
-        await logInventoryChange(null, {
-          businessId: req.businessId, productId: null, productName: p.name,
-          changeType: 'Product deleted (bulk)', quantityChange: -p.quantity,
-          quantityBefore: p.quantity, quantityAfter: 0,
-        });
-      }
-    }
+    // missing a bulk wipe. Fired concurrently via Promise.all rather than
+    // awaited one-by-one in a loop — see the comment above the route.
+    const toLog = rows.filter(p => p.quantity > 0);
+    await Promise.all(toLog.map(p => logInventoryChange(null, {
+      businessId: req.businessId, productId: null, productName: p.name,
+      changeType: 'Product deleted (bulk)', quantityChange: -p.quantity,
+      quantityBefore: p.quantity, quantityAfter: 0,
+    })));
 
     res.json({ deleted: rows.length });
   } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
+    try { await client.query('ROLLBACK'); } catch (_) { /* ignore rollback errors */ }
     client.release();
+    console.error('Bulk delete failed:', err);
+    res.status(500).json({ error: 'Could not delete products' });
   }
 });
 
