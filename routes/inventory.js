@@ -39,6 +39,52 @@ router.get('/history', async (req, res) => {
   })));
 });
 
+// DELETE /all -> wipes every product for this business.
+// Must be declared BEFORE DELETE /:id, or Express will treat "all"
+// as an :id value. Same reasoning as GET /history above.
+router.delete('/all', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query(
+      'SELECT id, name, quantity FROM products WHERE business_id = $1',
+      [req.businessId]
+    );
+
+    if (!rows.length) {
+      return res.json({ deleted: 0 });
+    }
+
+    await client.query('BEGIN');
+
+    // Remove variants first in case product_variants.product_id isn't
+    // set up with ON DELETE CASCADE — avoids a foreign key violation.
+    await client.query('DELETE FROM product_variants WHERE business_id = $1', [req.businessId]);
+    await client.query('DELETE FROM products WHERE business_id = $1', [req.businessId]);
+
+    await client.query('COMMIT');
+
+    // Log one history entry per product that had stock, same shape as the
+    // single-product delete route, so the audit trail isn't silently
+    // missing a bulk wipe. Done after commit since it's a separate concern.
+    for (const p of rows) {
+      if (p.quantity > 0) {
+        await logInventoryChange(null, {
+          businessId: req.businessId, productId: null, productName: p.name,
+          changeType: 'Product deleted (bulk)', quantityChange: -p.quantity,
+          quantityBefore: p.quantity, quantityAfter: 0,
+        });
+      }
+    }
+
+    res.json({ deleted: rows.length });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+});
+
 router.get('/', async (req, res) => {
   const { rows } = await pool.query(
     'SELECT id, name, category, cost, price, quantity, threshold, image_url, description, specifications FROM products WHERE business_id = $1 ORDER BY id',
