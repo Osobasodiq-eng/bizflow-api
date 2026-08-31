@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { logInventoryChange } = require('../db/inventoryLog');
+const { sendOrderStatusEmail } = require('../db/email');
 
 function formatOrder(row, customerName) {
   return {
@@ -138,6 +139,11 @@ router.patch('/:idOrCode', async (req, res) => {
   const updates = Object.keys(fieldMap).filter(f => req.body[f] !== undefined);
   if (!updates.length) return res.status(400).json({ error: 'No valid fields to update' });
 
+  // Fetch the CURRENT status before updating, so we only email when it
+  // actually changes — not every time the edit form is saved.
+  const before = await pool.query('SELECT status FROM orders WHERE id = $1 AND business_id = $2', [id, req.businessId]);
+  const previousStatus = before.rows[0]?.status;
+
   const setClause = updates.map((f, i) => `${fieldMap[f]} = $${i + 1}`).join(', ');
   const values = updates.map(f => req.body[f]);
   const { rows } = await pool.query(
@@ -145,7 +151,16 @@ router.patch('/:idOrCode', async (req, res) => {
     [...values, id, req.businessId]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
-  const cust = await pool.query('SELECT name FROM customers WHERE id = $1', [rows[0].customer_id]);
+  const cust = await pool.query('SELECT name, email FROM customers WHERE id = $1', [rows[0].customer_id]);
+
+  if (req.body.status !== undefined && req.body.status !== previousStatus && cust.rows[0]?.email) {
+    const biz = await pool.query('SELECT name FROM businesses WHERE id = $1', [req.businessId]);
+    sendOrderStatusEmail({
+      to: cust.rows[0].email, storeName: biz.rows[0]?.name,
+      orderId: `BF-${String(rows[0].id).padStart(4, '0')}`, status: rows[0].status, amount: Number(rows[0].amount),
+    }).catch(() => {});
+  }
+
   res.json(formatOrder(rows[0], cust.rows[0]?.name));
 });
 

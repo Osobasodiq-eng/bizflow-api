@@ -18,6 +18,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { logInventoryChange } = require('../db/inventoryLog');
+const { sendOrderStatusEmail } = require('../db/email');
 
 function parseBusinessId(raw) {
   const id = Number(raw);
@@ -60,8 +61,8 @@ async function resolveDeliveryFee(client, businessId, deliveryZoneId) {
 // an order created either way ends up identical in the database.
 async function createOrderFromItems(client, { businessId, customer, items, delivery, deliveryFee, paymentStatus, paystackReference }) {
   const custResult = await client.query(
-    `INSERT INTO customers (business_id, name, phone, location, tag) VALUES ($1, $2, $3, $4, 'New') RETURNING id`,
-    [businessId, customer.name, customer.phone, customer.location || 'Unknown']
+    `INSERT INTO customers (business_id, name, phone, email, location, tag) VALUES ($1, $2, $3, $4, $5, 'New') RETURNING id`,
+    [businessId, customer.name, customer.phone, customer.email || null, customer.location || 'Unknown']
   );
   const resolvedCustomerId = custResult.rows[0].id;
 
@@ -152,8 +153,19 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
     });
   }
 
+  const orderCode = `BF-${String(newOrderId).padStart(4, '0')}`;
+  if (customer.email) {
+    const bizResult = await client.query('SELECT name FROM businesses WHERE id = $1', [businessId]);
+    // Never let an email problem break order creation — fire-and-forget,
+    // sendOrderStatusEmail already swallows its own errors internally too.
+    sendOrderStatusEmail({
+      to: customer.email, storeName: bizResult.rows[0]?.name,
+      orderId: orderCode, status: 'New', amount,
+    }).catch(() => {});
+  }
+
   return {
-    id: `BF-${String(newOrderId).padStart(4, '0')}`,
+    id: orderCode,
     itemsTotal, deliveryFee, amount,
     items: orderItems,
     status: 'New',
