@@ -170,3 +170,6 @@ ALTER TABLE businesses ADD COLUMN IF NOT EXISTS paystack_account_name TEXT;
 -- accidentally create the same order twice (e.g. buyer reloads the
 -- confirmation page after paying)
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS paystack_reference TEXT UNIQUE;
+
+-- Needed so order-status emails have somewhere to send to
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS email TEXT;
