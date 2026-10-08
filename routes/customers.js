@@ -3,8 +3,28 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 
-// Computes orderCount/spend/lastOrderDate live from the orders table,
-// same approach as the in-memory version — just SQL instead of .filter()
+// Classifies a customer from their REAL order behavior — this replaces the
+// old approach of storing a tag once at signup ('New') and never touching
+// it again. Priority matters here: a customer who's gone quiet is flagged
+// "At Risk" even if they used to be a big spender, since that's the one
+// that actually needs the merchant's attention. Thresholds are a starting
+// point, easy to adjust:
+//   At Risk — has ordered before, but nothing in the last 60 days
+//   VIP     — ₦100,000+ total spend, or 5+ orders (and not gone quiet)
+//   Frequent— 2+ orders, most recent within 30 days
+//   New     — everything else (no orders yet, or just getting started)
+function computeTag({ orderCount, spend, lastOrderDate }) {
+  const daysSinceLastOrder = lastOrderDate ? (Date.now() - new Date(lastOrderDate).getTime()) / 86400000 : null;
+
+  if (orderCount >= 1 && daysSinceLastOrder !== null && daysSinceLastOrder > 60) return 'At Risk';
+  if (spend >= 100000 || orderCount >= 5) return 'VIP';
+  if (orderCount >= 2 && daysSinceLastOrder !== null && daysSinceLastOrder <= 30) return 'Frequent';
+  return 'New';
+}
+
+// Computes orderCount/spend/lastOrderDate live from the orders table, then
+// derives a fresh tag from those real numbers — same approach as the
+// in-memory version — just SQL instead of .filter()
 async function withStats(businessId, customerRows) {
   if (!customerRows.length) return [];
   const ids = customerRows.map(c => c.id);
@@ -18,20 +38,21 @@ async function withStats(businessId, customerRows) {
     const spend = custOrders.reduce((sum, o) => sum + Number(o.amount), 0);
     const sorted = [...custOrders].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     const last = sorted[0];
-    return {
-      ...c,
+    const stats = {
       orderCount: custOrders.length,
       spend,
       lastOrderDate: last ? last.created_at : null,
       lastOrderItem: last ? last.items[0]?.name : null,
     };
+    return { ...c, ...stats, tag: computeTag(stats) };
   });
 }
 
 router.get('/segments', async (req, res) => {
-  const { rows } = await pool.query('SELECT tag, COUNT(*) FROM customers WHERE business_id = $1 GROUP BY tag', [req.businessId]);
+  const { rows } = await pool.query('SELECT * FROM customers WHERE business_id = $1', [req.businessId]);
+  const withTags = await withStats(req.businessId, rows);
   const counts = { VIP: 0, Frequent: 0, New: 0, 'At Risk': 0 };
-  rows.forEach(r => { if (counts[r.tag] !== undefined) counts[r.tag] = Number(r.count); });
+  withTags.forEach(c => { counts[c.tag] = (counts[c.tag] || 0) + 1; });
   res.json(counts);
 });
 
@@ -58,7 +79,11 @@ router.post('/', async (req, res) => {
 });
 
 router.patch('/:id', async (req, res) => {
-  const fields = ['name', 'phone', 'location', 'tag'];
+  // 'tag' is intentionally NOT editable here anymore — it's computed live
+  // from real order behavior (see computeTag above), so a manual edit
+  // would just get silently overwritten on the next read. Name/phone/
+  // location are still genuinely editable business details.
+  const fields = ['name', 'phone', 'location'];
   const updates = fields.filter(f => req.body[f] !== undefined);
   if (!updates.length) return res.status(400).json({ error: 'No valid fields to update' });
   const setClause = updates.map((f, i) => `${f} = $${i + 1}`).join(', ');
