@@ -1,92 +1,38 @@
-# BizFlow API + Fully Connected Dashboard
+# BizFlow / Kooza API
 
-**Status: integration complete.** Every panel in `bizflow_v2.html` now pulls
-live data from this API — no hardcoded numbers left. This README documents
-what's wired and how to run it.
+Multi-business API: Express + Postgres, JWT login, storefront checkout with
+Paystack split payments, inventory, expenses, and a platform-owner admin view.
+Every merchant route is scoped by `business_id` taken from the login token.
 
-## Run it
-
+## Run locally
 ```bash
-cd api
 npm install
-npm start
+cp .env.example .env   # fill in what you need; export the vars or use your host's env UI
+npm start              # runs db/migrate.js (idempotent) then server.js on :4000
 ```
-Runs at `http://localhost:4000`. Then open `bizflow_v2.html` in your browser
-(same folder, one level up) — every tab will load real data automatically.
+Needs a Postgres database (`DATABASE_URL`). Without it, it falls back to
+`postgresql://postgres:devpass@localhost:5432/bizflow_dev`.
 
-## What's live in each panel
+## Environment variables
+See `.env.example`. The important ones:
+- `JWT_SECRET` — **must be set in production.** Without it the server uses a public default and anyone could forge a login.
+- `DASHBOARD_URL` — used to build the link in password-reset emails (`<DASHBOARD_URL>/?reset=<token>`).
+- `PAYSTACK_SECRET_KEY`, `MAILGUN_*`, `IMAGEKIT_*`, `ADMIN_EMAILS`.
 
-### Dashboard
-- 4 KPI cards, revenue chart, payment methods donut, orders-by-status bar
-  chart, top products chart, and the activity feed — all fetched and
-  rendered from `/api/dashboard/*` the moment the page loads.
+## Paystack webhook (one-time setup)
+Paystack Dashboard -> Settings -> API Keys & Webhooks -> Webhook URL:
+`https://<your-api-host>/api/paystack-webhook`
+This guarantees an order is created for every successful payment even if the
+buyer closes the tab before being redirected back to the storefront. Calls are
+verified with Paystack's signature; duplicates are safe (one order per reference).
 
-### Orders
-- Table loads from `GET /api/orders`.
-- **Search box and status filter are live** — every keystroke/selection
-  re-queries the API with `?search=` and `?status=` and re-renders the table.
-- "New Order" still opens the AI assistant flow (unchanged).
+## Route map
+- `POST /api/auth/{signup,login,forgot-password,reset-password}` — public, rate-limited
+- `/api/public/:businessId/*` — storefront (store, products, delivery-zones, orders, checkout/initialize, checkout/verify)
+- `POST /api/paystack-webhook` — Paystack only (signature checked)
+- Authenticated (Bearer token): `/api/dashboard`, `/api/orders`, `/api/customers`, `/api/products`, `/api/payments`, `/api/expenses`, `/api/delivery-zones`, `/api/business`, `/api/paystack`, `/api/imagekit`
+- `/api/admin/*` — only emails listed in `ADMIN_EMAILS`
 
-### Customers
-- Segment chart from `GET /api/customers/segments`.
-- Detail card automatically shows your highest-spending customer
-  (`GET /api/customers`, sorted by spend).
-- Full customer table, all computed live from real order history.
-
-### Inventory
-- KPI cards + product list load from `/api/products/summary` and `/api/products`.
-- **"Add product" is now a real action** — click it, answer the 4 prompts
-  (name/cost/price/quantity), and it `POST`s to `/api/products`, then
-  refreshes the list immediately.
-
-### Payments
-- KPI cards, the 7-day collections chart, and the payment log all load from
-  `/api/payments/*`.
-- **"Mark as paid" is now a real action** — click it, type an order ID
-  (e.g. `BF-0041`) and a method, and it `POST`s to
-  `/api/payments/:orderId/mark-paid`, then refreshes the log.
-
-### WhatsApp
-Still the "Phase 2 preview" mock — see the note in the original guide below
-for how `POST /api/orders` already supports the flow it hints at.
-
-## How the wiring works (the pattern used everywhere)
-
-Every panel follows the same 3-step pattern:
-1. HTML elements get an `id` (e.g. `id="kpi-revenue"`)
-2. A `load...()` JS function `fetch()`s the relevant endpoint(s)
-3. The response is used to fill in text (`.textContent`), build a Chart.js
-   chart, or generate table rows (`.innerHTML = array.map(...).join('')`)
-
-Panels other than Dashboard load **lazily** — the first time you click into
-that tab — tracked with flags like `window._ordersDone`, so data isn't
-fetched for tabs you never visit.
-
-The action buttons (Add product, Mark as paid) use simple `prompt()` dialogs
-to collect input rather than a full form UI — good enough to prove the real
-`POST` requests work end-to-end; swap these for proper modals when you're
-ready to polish the UI.
-
-## Next steps when you're ready to go live
-
-1. **Swap the in-memory arrays in `data/store.js` for a real database.**
-   The route files won't need to change much — they just call functions;
-   only `store.js` needs to talk to Postgres/MongoDB/etc instead.
-2. **Add authentication** — right now anyone who knows the URL can call
-   these endpoints. You'll want an `Authorization: Bearer <token>` header
-   checked on every request before this touches real customer data.
-3. **Deploy the API** somewhere (Render, Railway, Fly.io) and update
-   `API_BASE` in `bizflow_v2.html` to point at the deployed URL instead of
-   `localhost:4000` — this is the ONE line you'll need to change.
-4. **Replace the `prompt()`-based actions** with real modal forms for a
-   production-quality UI.
-
-## Files
-
-- `server.js` — wires up all the route modules
-- `data/store.js` — in-memory data (seeded to match your mockup)
-- `routes/dashboard.js` — KPI + chart aggregation endpoints
-- `routes/orders.js` — orders CRUD + search/filter
-- `routes/customers.js` — customers + segments
-- `routes/inventory.js` — products CRUD + stock
-- `routes/payments.js` — payment log + collections chart + mark-as-paid
+## Known unfinished
+- `routes/whatsapp.js` and `data/store.js` are leftovers from the in-memory prototype. They are **not mounted** in `server.js` and the dashboard marks WhatsApp as "Soon". A real version needs a `whatsapp_threads` table and an inbound webhook.
+- Cancelling or deleting an order does not return stock to inventory.
