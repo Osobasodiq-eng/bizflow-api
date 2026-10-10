@@ -173,3 +173,22 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS paystack_reference TEXT UNIQUE;
 
 -- Needed so order-status emails have somewhere to send to
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS email TEXT;
+
+-- Fulfilment: shipping details on the order, plus a record of every status change
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS courier TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_number TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS order_status_history (
+  id SERIAL PRIMARY KEY,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  from_status TEXT,
+  to_status TEXT NOT NULL,
+  note TEXT,
+  customer_notified BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_order_status_history_order ON order_status_history(order_id);
+CREATE INDEX IF NOT EXISTS idx_orders_business_status ON orders(business_id, status);
