@@ -1,0 +1,128 @@
+// routes/customers.js
+const express = require('express');
+const router = express.Router();
+const pool = require('../db/pool');
+
+// Classifies a customer from their REAL order behavior — this replaces the
+// old approach of storing a tag once at signup ('New') and never touching
+// it again. Priority matters here: a customer who's gone quiet is flagged
+// "At Risk" even if they used to be a big spender, since that's the one
+// that actually needs the merchant's attention. Thresholds are a starting
+// point, easy to adjust:
+//   At Risk — has ordered before, but nothing in the last 60 days
+//   VIP     — ₦100,000+ total spend, or 5+ orders (and not gone quiet)
+//   Frequent— 2+ orders, most recent within 30 days
+//   New     — everything else (no orders yet, or just getting started)
+function computeTag({ orderCount, spend, lastOrderDate }) {
+  const daysSinceLastOrder = lastOrderDate ? (Date.now() - new Date(lastOrderDate).getTime()) / 86400000 : null;
+
+  if (orderCount >= 1 && daysSinceLastOrder !== null && daysSinceLastOrder > 60) return 'At Risk';
+  if (spend >= 100000 || orderCount >= 5) return 'VIP';
+  if (orderCount >= 2 && daysSinceLastOrder !== null && daysSinceLastOrder <= 30) return 'Frequent';
+  return 'New';
+}
+
+// Computes orderCount/spend/lastOrderDate live from the orders table, then
+// derives a fresh tag from those real numbers — same approach as the
+// in-memory version — just SQL instead of .filter()
+async function withStats(businessId, customerRows) {
+  if (!customerRows.length) return [];
+  const ids = customerRows.map(c => c.id);
+  const { rows: orderRows } = await pool.query(
+    `SELECT customer_id, amount, items, created_at FROM orders
+     WHERE business_id = $1 AND customer_id = ANY($2) AND status != 'Cancelled'`,
+    [businessId, ids]
+  );
+  return customerRows.map(c => {
+    const custOrders = orderRows.filter(o => o.customer_id === c.id);
+    const spend = custOrders.reduce((sum, o) => sum + Number(o.amount), 0);
+    const sorted = [...custOrders].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const last = sorted[0];
+    const stats = {
+      orderCount: custOrders.length,
+      spend,
+      lastOrderDate: last ? last.created_at : null,
+      lastOrderItem: last ? last.items[0]?.name : null,
+    };
+    return { ...c, ...stats, tag: computeTag(stats) };
+  });
+}
+
+router.get('/segments', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM customers WHERE business_id = $1', [req.businessId]);
+  const withTags = await withStats(req.businessId, rows);
+  const counts = { VIP: 0, Frequent: 0, New: 0, 'At Risk': 0 };
+  withTags.forEach(c => { counts[c.tag] = (counts[c.tag] || 0) + 1; });
+  res.json(counts);
+});
+
+router.get('/', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM customers WHERE business_id = $1 ORDER BY id', [req.businessId]);
+  res.json(await withStats(req.businessId, rows));
+});
+
+router.get('/:id', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM customers WHERE id = $1 AND business_id = $2', [req.params.id, req.businessId]);
+  if (!rows[0]) return res.status(404).json({ error: 'Customer not found' });
+  const [withStatsRow] = await withStats(req.businessId, rows);
+  res.json(withStatsRow);
+});
+
+router.post('/', async (req, res) => {
+  const { name, phone, location } = req.body;
+  if (!name || !phone) return res.status(400).json({ error: 'name and phone are required' });
+  const { rows } = await pool.query(
+    `INSERT INTO customers (business_id, name, phone, location, tag) VALUES ($1, $2, $3, $4, 'New') RETURNING *`,
+    [req.businessId, name, phone, location || 'Unknown']
+  );
+  res.status(201).json(rows[0]);
+});
+
+router.patch('/:id', async (req, res) => {
+  // 'tag' is intentionally NOT editable here anymore — it's computed live
+  // from real order behavior (see computeTag above), so a manual edit
+  // would just get silently overwritten on the next read. Name/phone/
+  // location are still genuinely editable business details.
+  const fields = ['name', 'phone', 'location'];
+  const updates = fields.filter(f => req.body[f] !== undefined);
+  if (!updates.length) return res.status(400).json({ error: 'No valid fields to update' });
+  const setClause = updates.map((f, i) => `${f} = $${i + 1}`).join(', ');
+  const values = updates.map(f => req.body[f]);
+  const { rows } = await pool.query(
+    `UPDATE customers SET ${setClause} WHERE id = $${updates.length + 1} AND business_id = $${updates.length + 2} RETURNING *`,
+    [...values, req.params.id, req.businessId]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Customer not found' });
+  res.json(rows[0]);
+});
+
+router.delete('/:id', async (req, res) => {
+  const { rowCount } = await pool.query('DELETE FROM customers WHERE id = $1 AND business_id = $2', [req.params.id, req.businessId]);
+  if (!rowCount) return res.status(404).json({ error: 'Customer not found' });
+  res.status(204).send();
+});
+
+// POST /import — bulk-create customers from a parsed CSV
+router.post('/import', async (req, res) => {
+  const rows = req.body.rows;
+  if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'rows array is required' });
+
+  let created = 0;
+  const errors = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    try {
+      if (!r.name || !r.phone) throw new Error('name and phone are required');
+      await pool.query(
+        `INSERT INTO customers (business_id, name, phone, location, tag) VALUES ($1, $2, $3, $4, 'New')`,
+        [req.businessId, r.name, r.phone, r.location || 'Unknown']
+      );
+      created++;
+    } catch (err) {
+      errors.push({ row: i + 1, name: r.name || '(no name)', error: err.message });
+    }
+  }
+  res.json({ created, errors });
+});
+
+module.exports = router;
