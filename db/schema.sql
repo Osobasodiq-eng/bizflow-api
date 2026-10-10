@@ -192,3 +192,40 @@ CREATE TABLE IF NOT EXISTS order_status_history (
 );
 CREATE INDEX IF NOT EXISTS idx_order_status_history_order ON order_status_history(order_id);
 CREATE INDEX IF NOT EXISTS idx_orders_business_status ON orders(business_id, status);
+
+-- Marketing: email campaigns, who each one was sent to, and attribution
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS marketing_opt_out BOOLEAN NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS campaigns (
+  id SERIAL PRIMARY KEY,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  channel TEXT NOT NULL DEFAULT 'email',
+  segment TEXT NOT NULL DEFAULT 'all',
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft', -- draft | scheduled | sending | sent | failed
+  scheduled_at TIMESTAMPTZ,
+  sent_at TIMESTAMPTZ,
+  recipient_count INTEGER NOT NULL DEFAULT 0,
+  sent_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_campaigns_business ON campaigns(business_id);
+CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status, scheduled_at);
+
+CREATE TABLE IF NOT EXISTS campaign_recipients (
+  id SERIAL PRIMARY KEY,
+  campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  email TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | sent | failed | skipped
+  error TEXT,
+  sent_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_recipients_campaign ON campaign_recipients(campaign_id, status);
+
+-- Which campaign's link a buyer came through (set at checkout)
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_orders_campaign ON orders(campaign_id);
