@@ -114,6 +114,9 @@ app.use('/api/auth', authLimiter, safe(authRouter));
 // see routes/public.js for how that stays safe.
 app.use('/api/public', publicOrderLimiter, safe(require('./routes/public')));
 
+// Unsubscribe links inside marketing emails — public, signed per customer (see db/campaigns.js)
+app.use('/api/unsubscribe', express.urlencoded({ extended: false }), safe(require('./routes/unsubscribe')));
+
 // Paystack calls this itself (no login possible) — it is protected by
 // verifying Paystack's signature instead. See routes/paystack-webhook.js.
 app.use('/api/paystack-webhook', safe(webhookRouter));
@@ -124,6 +127,7 @@ app.use('/api/paystack-webhook', safe(webhookRouter));
 app.use('/api/dashboard', requireAuth, safe(require('./routes/dashboard')));
 app.use('/api/orders', requireAuth, safe(require('./routes/orders')));
 app.use('/api/fulfilment', requireAuth, safe(require('./routes/fulfilment')));
+app.use('/api/marketing', requireAuth, safe(require('./routes/marketing')));
 app.use('/api/customers', requireAuth, safe(require('./routes/customers')));
 app.use('/api/products', requireAuth, safe(require('./routes/inventory')));
 app.use('/api/imagekit', requireAuth, safe(require('./routes/imagekit')));
@@ -157,6 +161,8 @@ app.use((err, req, res, next) => {
 
 // Belt and braces: log stray async failures instead of letting them kill the server.
 process.on('unhandledRejection', (reason) => console.error('Unhandled promise rejection:', reason));
+
+require('./db/campaigns').startScheduler(); // sends scheduled campaigns when they're due
 
 app.listen(PORT, () => {
   console.log(`BizFlow API running at http://localhost:${PORT}`);
