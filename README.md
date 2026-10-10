@@ -31,8 +31,18 @@ verified with Paystack's signature; duplicates are safe (one order per reference
 - `/api/public/:businessId/*` — storefront (store, products, delivery-zones, orders, checkout/initialize, checkout/verify)
 - `POST /api/paystack-webhook` — Paystack only (signature checked)
 - Authenticated (Bearer token): `/api/dashboard`, `/api/orders`, `/api/customers`, `/api/products`, `/api/payments`, `/api/expenses`, `/api/delivery-zones`, `/api/business`, `/api/paystack`, `/api/imagekit`
+- `/api/fulfilment/*` — fulfilment board and status changes (see below)
 - `/api/admin/*` — only emails listed in `ADMIN_EMAILS`
+
+## Fulfilment & order emails
+The dashboard's **Fulfilment** screen shows open orders as a board: New -> Preparing -> Shipped -> Delivered (Cancelled is a side branch).
+- `GET /api/fulfilment/board` — orders grouped by stage
+- `POST /api/fulfilment/:id/status` `{ status, note?, courier?, trackingNumber?, notify? }` — move one order
+- `POST /api/fulfilment/bulk-status` `{ orderIds, status }` — move many at once
+- `GET /api/fulfilment/:id/history` — status timeline (who was emailed)
+
+Every move emails the customer (if they gave an email). Shipped emails include courier/tracking, pickup orders get "Ready for pickup" wording, and an optional note from the seller is included. Moves are forward-only; cancelling is allowed before shipping and **puts the stock back**. A cancelled order can't be reopened. All status changes (including the older order edit form) go through `db/fulfilment.js`. Needs Mailgun (`MAILGUN_*`) to actually send.
 
 ## Known unfinished
 - `routes/whatsapp.js` and `data/store.js` are leftovers from the in-memory prototype. They are **not mounted** in `server.js` and the dashboard marks WhatsApp as "Soon". A real version needs a `whatsapp_threads` table and an inbound webhook.
-- Cancelling or deleting an order does not return stock to inventory.
+- Deleting an order (as opposed to cancelling it) does not return stock to inventory.
