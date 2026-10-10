@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { logInventoryChange } = require('../db/inventoryLog');
-const { sendOrderStatusEmail } = require('../db/email');
+const { changeOrderStatus } = require('../db/fulfilment');
 
 function formatOrder(row, customerName) {
   return {
@@ -31,8 +31,13 @@ router.get('/', async (req, res) => {
   if (status) { params.push(status); query += ` AND o.status = $${params.length}`; }
   if (paymentStatus) { params.push(paymentStatus); query += ` AND o.payment_status = $${params.length}`; }
   if (search) {
-    params.push(`%${search.toLowerCase()}%`);
-    query += ` AND (LOWER(c.name) LIKE $${params.length} OR o.id::text LIKE $${params.length})`;
+    const term = search.toLowerCase().trim();
+    params.push(`%${term}%`);
+    const nameParam = params.length;
+    // Order codes are shown as "BF-0042" but stored as the number 42, so
+    // searching "BF-0042" must be matched against the number, not the text.
+    params.push(`%${term.replace(/^bf-?0*/, '')}%`);
+    query += ` AND (LOWER(c.name) LIKE $${nameParam} OR o.id::text LIKE $${params.length})`;
   }
   query += ' ORDER BY o.created_at DESC';
 
@@ -135,33 +140,40 @@ router.post('/', async (req, res) => {
 
 router.patch('/:idOrCode', async (req, res) => {
   const id = req.params.idOrCode.replace(/^BF-0*/, '');
-  const fieldMap = { status: 'status', paymentStatus: 'payment_status', delivery: 'delivery' };
-  const updates = Object.keys(fieldMap).filter(f => req.body[f] !== undefined);
-  if (!updates.length) return res.status(400).json({ error: 'No valid fields to update' });
+  const otherFields = { paymentStatus: 'payment_status', delivery: 'delivery' };
+  const otherUpdates = Object.keys(otherFields).filter(f => req.body[f] !== undefined);
+  const statusGiven = req.body.status !== undefined;
+  if (!otherUpdates.length && !statusGiven) return res.status(400).json({ error: 'No valid fields to update' });
 
-  // Fetch the CURRENT status before updating, so we only email when it
-  // actually changes — not every time the edit form is saved.
-  const before = await pool.query('SELECT status FROM orders WHERE id = $1 AND business_id = $2', [id, req.businessId]);
-  const previousStatus = before.rows[0]?.status;
-
-  const setClause = updates.map((f, i) => `${fieldMap[f]} = $${i + 1}`).join(', ');
-  const values = updates.map(f => req.body[f]);
-  const { rows } = await pool.query(
-    `UPDATE orders SET ${setClause} WHERE id = $${updates.length + 1} AND business_id = $${updates.length + 2} RETURNING *`,
-    [...values, id, req.businessId]
-  );
-  if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
-  const cust = await pool.query('SELECT name, email FROM customers WHERE id = $1', [rows[0].customer_id]);
-
-  if (req.body.status !== undefined && req.body.status !== previousStatus && cust.rows[0]?.email) {
-    const biz = await pool.query('SELECT name FROM businesses WHERE id = $1', [req.businessId]);
-    sendOrderStatusEmail({
-      to: cust.rows[0].email, storeName: biz.rows[0]?.name,
-      orderId: `BF-${String(rows[0].id).padStart(4, '0')}`, status: rows[0].status, amount: Number(rows[0].amount),
-    }).catch(() => {});
+  if (otherUpdates.length) {
+    const setClause = otherUpdates.map((f, i) => `${otherFields[f]} = $${i + 1}`).join(', ');
+    const values = otherUpdates.map(f => req.body[f]);
+    const { rowCount } = await pool.query(
+      `UPDATE orders SET ${setClause} WHERE id = $${otherUpdates.length + 1} AND business_id = $${otherUpdates.length + 2}`,
+      [...values, id, req.businessId]
+    );
+    if (!rowCount) return res.status(404).json({ error: 'Order not found' });
   }
 
-  res.json(formatOrder(rows[0], cust.rows[0]?.name));
+  // Status changes go through the shared fulfilment service so this older edit
+  // form behaves exactly like the Fulfilment screen: history entry, stock
+  // returned on cancel, buyer emailed.
+  if (statusGiven) {
+    try {
+      await changeOrderStatus({ businessId: req.businessId, orderId: id, status: req.body.status, strict: false });
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message });
+      throw err;
+    }
+  }
+
+  const { rows } = await pool.query(
+    `SELECT o.*, c.name AS customer_name FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
+     WHERE o.id = $1 AND o.business_id = $2`,
+    [id, req.businessId]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
+  res.json(formatOrder(rows[0], rows[0].customer_name));
 });
 
 router.delete('/:idOrCode', async (req, res) => {
