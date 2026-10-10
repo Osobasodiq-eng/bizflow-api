@@ -123,6 +123,7 @@ app.use('/api/paystack-webhook', safe(webhookRouter));
 // route file then uses to filter its SQL queries.
 app.use('/api/dashboard', requireAuth, safe(require('./routes/dashboard')));
 app.use('/api/orders', requireAuth, safe(require('./routes/orders')));
+app.use('/api/fulfilment', requireAuth, safe(require('./routes/fulfilment')));
 app.use('/api/customers', requireAuth, safe(require('./routes/customers')));
 app.use('/api/products', requireAuth, safe(require('./routes/inventory')));
 app.use('/api/imagekit', requireAuth, safe(require('./routes/imagekit')));
