@@ -2,8 +2,90 @@
 const express = require('express');
 const cors = require('cors');
 const { router: authRouter, requireAuth, requireAdmin } = require('./routes/auth');
-const safe = require('./middleware/safe');
-const rateLimit = require('./middleware/rateLimit');
+
+// ---- inlined helpers (previously middleware/safe.js, middleware/rateLimit.js, routes/paystack-webhook.js) ----
+const crypto = require('crypto');
+// middleware/safe.js
+// Express 4 does not catch errors thrown inside async route handlers: a
+// rejected promise (bad ID, DB hiccup, ...) becomes an unhandled rejection,
+// which on modern Node CRASHES the whole server. safe(router) wraps every
+// handler on a router so those errors go to Express's error handler instead.
+// No dependency needed.
+
+function safe(router) {
+  const wrapLayers = (stack) => {
+    for (const layer of stack) {
+      if (layer.route) {
+        for (const l of layer.route.stack) {
+          const fn = l.handle;
+          if (fn.length > 3 || fn.__safe) continue; // skip error-handling middleware
+          const wrapped = (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+          wrapped.__safe = true;
+          l.handle = wrapped;
+        }
+      }
+    }
+  };
+  wrapLayers(router.stack);
+  return router;
+}
+
+
+// middleware/rateLimit.js
+// Minimal in-memory rate limiter (per IP, fixed window). Good enough for a
+// single Render instance; if you ever run several instances, swap for a
+// shared store (e.g. Redis) or the express-rate-limit package.
+
+function rateLimit({ windowMs, max, message }) {
+  const hits = new Map(); // ip -> { count, resetAt }
+
+  // Periodically drop expired entries so the map can't grow forever
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, h] of hits) if (h.resetAt <= now) hits.delete(ip);
+  }, windowMs).unref();
+
+  return (req, res, next) => {
+    const now = Date.now();
+    let h = hits.get(req.ip);
+    if (!h || h.resetAt <= now) { h = { count: 0, resetAt: now + windowMs }; hits.set(req.ip, h); }
+    h.count++;
+    if (h.count > max) {
+      res.set('Retry-After', String(Math.ceil((h.resetAt - now) / 1000)));
+      return res.status(429).json({ error: message || 'Too many requests, please try again later.' });
+    }
+    next();
+  };
+}
+
+
+const webhookRouter = express.Router();
+webhookRouter.post('/', async (req, res) => {
+  const secret = process.env.PAYSTACK_SECRET_KEY;
+  if (!secret || !req.rawBody) return res.sendStatus(500);
+
+  const expected = crypto.createHmac('sha512', secret).update(req.rawBody).digest('hex');
+  const given = String(req.get('x-paystack-signature') || '');
+  const ok = given.length === expected.length &&
+    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+  if (!ok) return res.sendStatus(401);
+
+  const event = req.body || {};
+  if (event.event === 'charge.success' && event.data && event.data.reference) {
+    try {
+      const { status, body } = await require('./routes/public').fulfillPaystackReference(event.data.reference, null);
+      if (status >= 400) console.error(`Webhook could not fulfil ${event.data.reference}:`, body.error);
+    } catch (err) {
+      console.error(`Webhook error for ${event.data.reference}:`, err.message);
+    }
+  }
+  // Always 200 once the signature is valid, so Paystack doesn't retry forever
+  // for problems (e.g. item sold out) that a retry can't fix.
+  res.sendStatus(200);
+});
+
+
+// ---- end inlined helpers ----
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -34,7 +116,7 @@ app.use('/api/public', publicOrderLimiter, safe(require('./routes/public')));
 
 // Paystack calls this itself (no login possible) — it is protected by
 // verifying Paystack's signature instead. See routes/paystack-webhook.js.
-app.use('/api/paystack-webhook', safe(require('./routes/paystack-webhook')));
+app.use('/api/paystack-webhook', safe(webhookRouter));
 
 // Everything below this line requires a valid "Authorization: Bearer <token>"
 // header. requireAuth reads the token and sets req.businessId, which every
