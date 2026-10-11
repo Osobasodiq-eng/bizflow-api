@@ -262,3 +262,16 @@ CREATE TABLE IF NOT EXISTS automation_sends (
 -- one email per order for order-based automations, even if two servers race
 CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_sends_order ON automation_sends(automation_id, order_id) WHERE order_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_automation_sends_lookup ON automation_sends(automation_id, customer_id, created_at);
+
+-- Content calendar: social posts planned by date (posting itself is done by the owner)
+CREATE TABLE IF NOT EXISTS content_posts (
+  id SERIAL PRIMARY KEY,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  post_date DATE NOT NULL,
+  channel TEXT NOT NULL DEFAULT 'instagram',  -- instagram | whatsapp | facebook | tiktok | other
+  title TEXT NOT NULL,
+  caption TEXT,
+  status TEXT NOT NULL DEFAULT 'planned',     -- planned | posted
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_content_posts_date ON content_posts(business_id, post_date);
