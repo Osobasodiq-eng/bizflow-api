@@ -144,7 +144,7 @@ async function changeOrderStatus({ businessId, orderId, status, note, courier, t
     const result = await sendOrderStatusEmail({
       to: cust.email, storeName: biz && biz.name, orderId: orderCode(order.id), status,
       amount: Number(order.amount), courier: order.courier, trackingNumber: order.tracking_number,
-      note, isPickup: isPickup(order.delivery),
+      note, isPickup: isPickup(order.delivery), businessId,
     });
     email = { attempted: true, sent: !!result.sent, reason: result.reason };
     if (result.sent) await pool.query('UPDATE order_status_history SET customer_notified = true WHERE id = $1', [historyId]);

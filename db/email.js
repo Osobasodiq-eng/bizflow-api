@@ -41,7 +41,7 @@ function esc(v) {
 // Returns { sent: boolean, reason?: string } — never throws. Callers that
 // don't care (order creation) can ignore the result; the fulfilment screen
 // uses it to tell the seller whether the buyer was actually emailed.
-async function sendOrderStatusEmail({ to, storeName, orderId, status, amount, courier, trackingNumber, note, isPickup }) {
+async function sendOrderStatusEmail({ to, storeName, orderId, status, amount, courier, trackingNumber, note, isPickup, businessId }) {
   if (!to) return { sent: false, reason: 'no_email' }; // no email on file for this customer
   if (!process.env.MAILGUN_API_KEY || !process.env.MAILGUN_DOMAIN) {
     console.log(`(Email skipped — Mailgun not configured) Would have emailed ${to} about ${orderId}: ${status}`);
@@ -65,6 +65,7 @@ async function sendOrderStatusEmail({ to, storeName, orderId, status, amount, co
     // domain — "postmaster@" is the one every sandbox domain has by default.
     form.append('from', `${(storeName || 'Kooza Store').replace(/[<>"]/g, '')} <postmaster@${process.env.MAILGUN_DOMAIN}>`);
     form.append('to', to);
+    if (businessId && inboundEnabled()) form.append('h:Reply-To', inboxAddress(businessId)); // replies land in the Kooza inbox
     form.append('subject', `${content.subject} — ${orderId}`);
     form.append('html', `
       <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111827;">
@@ -175,4 +176,38 @@ async function sendMarketingEmail({ to, fromName, subject, html, text, unsubscri
   }
 }
 
-module.exports = { sendOrderStatusEmail, sendPasswordResetEmail, sendMarketingEmail, emailConfigured, esc };
+// The address customers reply to so their emails land in the Kooza inbox.
+// Only used once MAILGUN_INBOUND=true (i.e. after the Mailgun "forward" route is set up) — until then
+// replies keep going to the merchant's own mailbox, so nothing gets lost.
+const inboxAddress = businessId => process.env.MAILGUN_DOMAIN ? `b${businessId}@${process.env.MAILGUN_DOMAIN}` : null;
+const inboundEnabled = () => process.env.MAILGUN_INBOUND === 'true' && !!process.env.MAILGUN_DOMAIN;
+
+// A person-to-person reply written in the inbox. Threads onto the customer's original email when we have its id.
+async function sendInboxEmail({ businessId, to, fromName, subject, text, inReplyTo }) {
+  if (!emailConfigured()) return { sent: false, reason: 'not_configured', detail: 'Email isn\'t set up on the server (Mailgun).' };
+  try {
+    const addr = inboxAddress(businessId);
+    const form = new URLSearchParams();
+    form.append('from', `${String(fromName || 'Kooza Store').replace(/[<>"]/g, '')} <${addr}>`);
+    form.append('to', to);
+    form.append('subject', subject);
+    form.append('text', text);
+    form.append('html', `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.6;color:#111827;white-space:pre-wrap">${esc(text)}</div>`);
+    form.append('h:Reply-To', addr);
+    if (inReplyTo) { form.append('h:In-Reply-To', inReplyTo); form.append('h:References', inReplyTo); }
+    const auth = Buffer.from(`api:${process.env.MAILGUN_API_KEY}`).toString('base64');
+    const res = await fetch(`${MAILGUN_BASE}/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
+      method: 'POST', headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString(), signal: AbortSignal.timeout(15000),
+    });
+    const raw = await res.text();
+    if (!res.ok) { console.error(`Inbox reply to ${to} failed — Mailgun HTTP ${res.status}:`, raw.slice(0, 300)); return { sent: false, reason: 'send_failed', detail: `Mailgun said HTTP ${res.status}: ${raw.slice(0, 200)}` }; }
+    let id = null; try { id = JSON.parse(raw).id || null; } catch (e) {}
+    return { sent: true, messageId: id };
+  } catch (err) {
+    console.error(`Inbox reply to ${to} failed:`, err.message);
+    return { sent: false, reason: 'send_failed', detail: err.message };
+  }
+}
+
+module.exports = { sendOrderStatusEmail, sendPasswordResetEmail, sendMarketingEmail, sendInboxEmail, inboxAddress, inboundEnabled, emailConfigured, esc };

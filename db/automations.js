@@ -11,7 +11,8 @@
 // A check runs every 5 minutes; if the server was asleep, due emails go out when it wakes.
 
 const pool = require('./pool');
-const { sendMarketingEmail, emailConfigured } = require('./email');
+const { sendMarketingEmail, emailConfigured, inboxAddress, inboundEnabled } = require('./email');
+const { ownerEmail } = require('./campaigns');
 const { buildEmail } = require('./campaigns');
 
 const WIN_BACK_COOLDOWN_DAYS = 60;
@@ -110,7 +111,7 @@ async function sendOne(a, storeName, t) {
       campaign: { id: a.bucket_campaign_id, subject: a.subject, body: a.body },
       customer: { id: t.customer_id, name: t.name }, storeName, businessId: a.business_id,
     });
-    result = await sendMarketingEmail({ to: t.email.trim(), fromName: storeName, tag: `automation-${a.id}`, ...mail });
+    result = await sendMarketingEmail({ to: t.email.trim(), fromName: storeName, tag: `automation-${a.id}`, replyTo: inboundEnabled() ? inboxAddress(a.business_id) : await ownerEmail(a.business_id), ...mail });
   } catch (err) {
     result = { sent: false, reason: err.message }; // never leave a row stuck on 'pending'
   }

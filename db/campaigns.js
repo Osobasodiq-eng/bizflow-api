@@ -11,7 +11,7 @@
 
 const crypto = require('crypto');
 const pool = require('./pool');
-const { sendMarketingEmail, esc } = require('./email');
+const { sendMarketingEmail, esc, inboxAddress, inboundEnabled } = require('./email');
 const { loadCustomerStats, membersOf, isReachable } = require('./segments');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-this-in-production';
@@ -45,7 +45,7 @@ function personalise(text, customer, storeName) {
 function shopLink(businessId, campaignId) {
   const base = (process.env.STOREFRONT_URL || '').replace(/\/+$/, '');
   if (!base) return null;
-  return `${base}/?business=${businessId}${campaignId ? `&c=${campaignId}` : ''}`;
+  return `${base}?business=${businessId}${campaignId ? `&c=${campaignId}` : ''}`;
 }
 
 function buildEmail({ campaign, customer, storeName, businessId, preview = false }) {
@@ -63,6 +63,12 @@ function buildEmail({ campaign, customer, storeName, businessId, preview = false
     </div>`;
   const text = `${bodyText}\n\n${link ? `Shop: ${link}\n\n` : ''}${unsub ? `Unsubscribe: ${unsub}` : ''}`;
   return { subject, html, text, unsubscribeUrl: unsub };
+}
+
+// The store owner's login email — used as Reply-To so customers' replies reach a real person.
+async function ownerEmail(businessId) {
+  const { rows } = await pool.query('SELECT email FROM users WHERE business_id = $1 ORDER BY id LIMIT 1', [businessId]);
+  return rows[0] ? rows[0].email : null;
 }
 
 // ---- starting a send ----
@@ -107,6 +113,7 @@ async function processCampaign(campaignId) {
     const { rows: [campaign] } = await pool.query('SELECT * FROM campaigns WHERE id = $1', [campaignId]);
     if (!campaign || campaign.status !== 'sending') return;
     const { rows: [biz] } = await pool.query('SELECT name FROM businesses WHERE id = $1', [campaign.business_id]);
+    const replyTo = inboundEnabled() ? inboxAddress(campaign.business_id) : await ownerEmail(campaign.business_id);
 
     for (;;) {
       const { rows: batch } = await pool.query(
@@ -125,7 +132,7 @@ async function processCampaign(campaignId) {
         }
         const customer = { id: r.customer_id, name: r.name };
         const mail = buildEmail({ campaign, customer, storeName: biz && biz.name, businessId: campaign.business_id });
-        const result = await sendMarketingEmail({ to: r.email, fromName: biz && biz.name, tag: `campaign-${campaignId}`, ...mail });
+        const result = await sendMarketingEmail({ to: r.email, fromName: biz && biz.name, tag: `campaign-${campaignId}`, replyTo, ...mail });
         if (result.sent) {
           await pool.query(`UPDATE campaign_recipients SET status = 'sent', sent_at = now() WHERE id = $1`, [r.id]);
         } else {
@@ -172,6 +179,8 @@ async function tick() {
         console.error(`Scheduled campaign ${c.id} could not start:`, err.message || err);
       }
     }
+    await require('./automations').runAutomations();
+
     const { rows: sending } = await pool.query(`SELECT id FROM campaigns WHERE status = 'sending'`);
     for (const c of sending) if (!active.has(c.id)) sendInBackground(c.id);
   } catch (err) {
@@ -184,4 +193,4 @@ function startScheduler() {
   setInterval(tick, 60 * 1000);
 }
 
-module.exports = { startCampaign, sendInBackground, startScheduler, buildEmail, verifyUnsubToken, unsubUrl, personalise };
+module.exports = { ownerEmail, startCampaign, sendInBackground, startScheduler, buildEmail, verifyUnsubToken, unsubUrl, personalise };

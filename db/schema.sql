@@ -275,3 +275,41 @@ CREATE TABLE IF NOT EXISTS content_posts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_content_posts_date ON content_posts(business_id, post_date);
+
+-- Inbox: one conversation per contact per channel, with its messages.
+-- channel: chat (storefront) | email | whatsapp | instagram | facebook
+CREATE TABLE IF NOT EXISTS inbox_conversations (
+  id SERIAL PRIMARY KEY,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL,
+  contact_handle TEXT NOT NULL,        -- email address, phone number, social id, or a guest id for chat
+  contact_name TEXT,
+  contact_detail TEXT,                 -- chat only: the email/phone the visitor typed (never used as a key — see routes/chat.js)
+  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  subject TEXT,
+  status TEXT NOT NULL DEFAULT 'open', -- open | closed
+  unread_count INTEGER NOT NULL DEFAULT 0,
+  last_message_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_message_preview TEXT,
+  last_direction TEXT,                 -- in | out
+  last_inbound_external_id TEXT,       -- email Message-Id, so replies thread correctly
+  chat_token TEXT,                     -- secret the storefront visitor keeps to read replies
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (business_id, channel, contact_handle)
+);
+CREATE INDEX IF NOT EXISTS idx_inbox_conv_list ON inbox_conversations(business_id, status, last_message_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_inbox_chat_token ON inbox_conversations(chat_token) WHERE chat_token IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS inbox_messages (
+  id SERIAL PRIMARY KEY,
+  conversation_id INTEGER NOT NULL REFERENCES inbox_conversations(id) ON DELETE CASCADE,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  direction TEXT NOT NULL,             -- in | out
+  body TEXT NOT NULL,
+  external_id TEXT,                    -- provider's message id; stops the same message being stored twice
+  status TEXT NOT NULL DEFAULT 'sent', -- sent | failed
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_inbox_msg_external ON inbox_messages(conversation_id, external_id) WHERE external_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_inbox_msg_conv ON inbox_messages(conversation_id, id);
