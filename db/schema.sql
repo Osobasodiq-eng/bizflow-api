@@ -229,3 +229,36 @@ CREATE INDEX IF NOT EXISTS idx_campaign_recipients_campaign ON campaign_recipien
 -- Which campaign's link a buyer came through (set at checkout)
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_orders_campaign ON orders(campaign_id);
+
+-- Marketing automations: emails that send themselves when something happens
+-- (e.g. a customer goes quiet for 30 days, or 3 days after an order).
+CREATE TABLE IF NOT EXISTS automations (
+  id SERIAL PRIMARY KEY,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,                -- win_back | post_purchase
+  name TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  delay_days INTEGER NOT NULL,
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  enabled_at TIMESTAMPTZ,            -- only things that happen AFTER this trigger an email (no blasting history)
+  bucket_campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL, -- hidden campaign row that collects this automation's sales attribution
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (business_id, kind)
+);
+
+CREATE TABLE IF NOT EXISTS automation_sends (
+  id SERIAL PRIMARY KEY,
+  automation_id INTEGER NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  order_id INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+  email TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | sent | failed
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sent_at TIMESTAMPTZ
+);
+-- one email per order for order-based automations, even if two servers race
+CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_sends_order ON automation_sends(automation_id, order_id) WHERE order_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_automation_sends_lookup ON automation_sends(automation_id, customer_id, created_at);
