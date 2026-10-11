@@ -117,6 +117,10 @@ app.use('/api/public', publicOrderLimiter, safe(require('./routes/public')));
 // Unsubscribe links inside marketing emails — public, signed per customer (see db/campaigns.js)
 app.use('/api/unsubscribe', express.urlencoded({ extended: false }), safe(require('./routes/unsubscribe')));
 
+// Storefront "Message us" chat — public, per-store; and Mailgun delivering customer emails (signature-checked).
+app.use('/api/chat', safe(require('./routes/chat')));
+app.use('/api/inbound', safe(require('./routes/inbound')));
+
 // Paystack calls this itself (no login possible) — it is protected by
 // verifying Paystack's signature instead. See routes/paystack-webhook.js.
 app.use('/api/paystack-webhook', safe(webhookRouter));
@@ -128,6 +132,7 @@ app.use('/api/dashboard', requireAuth, safe(require('./routes/dashboard')));
 app.use('/api/orders', requireAuth, safe(require('./routes/orders')));
 app.use('/api/fulfilment', requireAuth, safe(require('./routes/fulfilment')));
 app.use('/api/marketing', requireAuth, safe(require('./routes/marketing')));
+app.use('/api/inbox', requireAuth, safe(require('./routes/inbox')));
 app.use('/api/customers', requireAuth, safe(require('./routes/customers')));
 app.use('/api/products', requireAuth, safe(require('./routes/inventory')));
 app.use('/api/imagekit', requireAuth, safe(require('./routes/imagekit')));
