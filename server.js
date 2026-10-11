@@ -163,6 +163,7 @@ app.use((err, req, res, next) => {
 process.on('unhandledRejection', (reason) => console.error('Unhandled promise rejection:', reason));
 
 require('./db/campaigns').startScheduler(); // sends scheduled campaigns when they're due
+require('./db/automations').startAutomations(); // sends automated emails (win-back, post-purchase) when they're due
 
 app.listen(PORT, () => {
   console.log(`BizFlow API running at http://localhost:${PORT}`);
