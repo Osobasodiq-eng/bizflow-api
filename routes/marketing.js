@@ -9,6 +9,7 @@ const pool = require('../db/pool');
 const { SEGMENTS, SEGMENT_KEYS, loadCustomerStats, membersOf, isReachable } = require('../db/segments');
 const { startCampaign, sendInBackground, buildEmail } = require('../db/campaigns');
 const { sendMarketingEmail, emailConfigured } = require('../db/email');
+const { KINDS, ensureAutomations } = require('../db/automations');
 
 const EMAIL_NOT_SET_UP = 'Email isn\'t set up on the server yet (Mailgun). Add MAILGUN_API_KEY and MAILGUN_DOMAIN, then try again.';
 
@@ -19,6 +20,7 @@ function shapeCampaign(c, stats = {}) {
     subject: c.subject, body: c.body, status: c.status,
     scheduledAt: c.scheduled_at, sentAt: c.sent_at, createdAt: c.created_at,
     recipientCount: c.recipient_count, sentCount: c.sent_count, failedCount: c.failed_count,
+    isAutomation: c.status === 'automation',
     orders: Number(stats.orders || 0), revenue: Number(stats.revenue || 0),
   };
 }
@@ -55,12 +57,13 @@ router.get('/overview', async (req, res) => {
   const customers = await loadCustomerStats(req.businessId);
   const [sent30, attributed, recent, counts] = await Promise.all([
     pool.query(
-      `SELECT COUNT(*) FROM campaign_recipients r JOIN campaigns c ON c.id = r.campaign_id
-       WHERE c.business_id = $1 AND r.status = 'sent' AND r.sent_at > now() - interval '30 days'`, [req.businessId]),
+      `SELECT (SELECT COUNT(*) FROM campaign_recipients r JOIN campaigns c ON c.id = r.campaign_id
+               WHERE c.business_id = $1 AND r.status = 'sent' AND r.sent_at > now() - interval '30 days')
+            + (SELECT COUNT(*) FROM automation_sends WHERE business_id = $1 AND status = 'sent' AND sent_at > now() - interval '30 days') AS count`, [req.businessId]),
     pool.query(
       `SELECT COUNT(*) AS orders, COALESCE(SUM(amount) FILTER (WHERE payment_status = 'Paid'), 0) AS revenue
        FROM orders WHERE business_id = $1 AND campaign_id IS NOT NULL AND status != 'Cancelled' AND created_at > now() - interval '30 days'`, [req.businessId]),
-    pool.query(`SELECT * FROM campaigns WHERE business_id = $1 ORDER BY created_at DESC LIMIT 5`, [req.businessId]),
+    pool.query(`SELECT * FROM campaigns WHERE business_id = $1 AND status != 'automation' ORDER BY created_at DESC LIMIT 5`, [req.businessId]),
     pool.query(`SELECT status, COUNT(*) FROM campaigns WHERE business_id = $1 GROUP BY status`, [req.businessId]),
   ]);
   const byStatus = Object.fromEntries(counts.rows.map(r => [r.status, Number(r.count)]));
@@ -101,7 +104,7 @@ router.get('/segments/:key/customers', async (req, res) => {
 // ---------- campaigns ----------
 router.get('/campaigns', async (req, res) => {
   const [campaigns, stats] = await Promise.all([
-    pool.query('SELECT * FROM campaigns WHERE business_id = $1 ORDER BY created_at DESC', [req.businessId]),
+    pool.query(`SELECT * FROM campaigns WHERE business_id = $1 AND status != 'automation' ORDER BY created_at DESC`, [req.businessId]),
     pool.query(CAMPAIGN_STATS_SQL, [req.businessId]),
   ]);
   const byId = Object.fromEntries(stats.rows.map(r => [r.campaign_id, r]));
@@ -146,7 +149,7 @@ router.patch('/campaigns/:id', async (req, res) => {
 
 router.delete('/campaigns/:id', async (req, res) => {
   const { rowCount } = await pool.query(
-    `DELETE FROM campaigns WHERE id = $1 AND business_id = $2 AND status != 'sending'`, [req.params.id, req.businessId]
+    `DELETE FROM campaigns WHERE id = $1 AND business_id = $2 AND status NOT IN ('sending','automation')`, [req.params.id, req.businessId]
   );
   if (!rowCount) return res.status(400).json({ error: 'Campaign not found, or it is sending right now' });
   res.status(204).send();
@@ -203,10 +206,83 @@ router.post('/test', async (req, res) => {
   } catch (err) { fail(res, err); }
 });
 
+// ---------- automations ----------
+function shapeAutomation(a, stats = {}) {
+  const k = KINDS[a.kind] || {};
+  return {
+    id: a.id, kind: a.kind, name: a.name, description: k.description || '', enabled: a.enabled,
+    delayDays: a.delay_days, minDelay: k.minDelay || 1, subject: a.subject, body: a.body, enabledAt: a.enabled_at,
+    sent: Number(stats.sent || 0), failed: Number(stats.failed || 0), lastSentAt: stats.last_sent || null,
+    orders: Number(stats.orders || 0), revenue: Number(stats.revenue || 0),
+  };
+}
+
+router.get('/automations', async (req, res) => {
+  await ensureAutomations(req.businessId);
+  const [autos, sends, attributed] = await Promise.all([
+    pool.query('SELECT * FROM automations WHERE business_id = $1 ORDER BY id', [req.businessId]),
+    pool.query(
+      `SELECT automation_id, COUNT(*) FILTER (WHERE status = 'sent') AS sent, COUNT(*) FILTER (WHERE status = 'failed') AS failed, MAX(sent_at) AS last_sent
+       FROM automation_sends WHERE business_id = $1 GROUP BY automation_id`, [req.businessId]),
+    pool.query(CAMPAIGN_STATS_SQL, [req.businessId]),
+  ]);
+  const sendsBy = Object.fromEntries(sends.rows.map(r => [r.automation_id, r]));
+  const attrBy = Object.fromEntries(attributed.rows.map(r => [r.campaign_id, r]));
+  res.json({
+    emailConfigured: emailConfigured(),
+    automations: autos.rows.map(a => shapeAutomation(a, { ...sendsBy[a.id], ...(attrBy[a.bucket_campaign_id] || {}) })),
+  });
+});
+
+// body: { enabled?, delayDays?, subject?, body? }
+router.patch('/automations/:id', async (req, res) => {
+  try {
+    const { rows: [a] } = await pool.query('SELECT * FROM automations WHERE id = $1 AND business_id = $2', [req.params.id, req.businessId]);
+    if (!a) return res.status(404).json({ error: 'Automation not found' });
+    const k = KINDS[a.kind] || { minDelay: 1 };
+    const bad = message => { throw { status: 400, message }; };
+    const sets = [], vals = [];
+    const add = (col, v) => { vals.push(v); sets.push(`${col} = $${vals.length}`); };
+
+    if (req.body.subject !== undefined) { const v = String(req.body.subject).trim(); if (!v) bad('Add a subject line'); if (v.length > 150) bad('Subject is too long (150 characters max)'); add('subject', v); }
+    if (req.body.body !== undefined) { const v = String(req.body.body).trim(); if (!v) bad('Write the message'); if (v.length > 5000) bad('Message is too long (5,000 characters max)'); add('body', v); }
+    if (req.body.delayDays !== undefined) {
+      const d = Number(req.body.delayDays);
+      if (!Number.isInteger(d) || d < k.minDelay || d > 365) bad(`Days must be a whole number from ${k.minDelay} to 365`);
+      add('delay_days', d);
+    }
+    if (req.body.enabled !== undefined) {
+      const on = req.body.enabled === true;
+      if (on && !emailConfigured()) bad(EMAIL_NOT_SET_UP);
+      add('enabled', on);
+      // switching ON starts the clock: only events from now on trigger emails
+      if (on && !a.enabled) add('enabled_at', new Date());
+    }
+    if (!sets.length) bad('Nothing to update');
+
+    vals.push(a.id);
+    const { rows: [updated] } = await pool.query(`UPDATE automations SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING *`, vals);
+    // keep the hidden attribution campaign's label in step with the flow
+    if (updated.bucket_campaign_id) await pool.query('UPDATE campaigns SET name = $1, subject = $2, body = $3 WHERE id = $4', [updated.name, updated.subject, updated.body, updated.bucket_campaign_id]);
+    res.json(shapeAutomation(updated));
+  } catch (err) { fail(res, err); }
+});
+
+// Recent sends for one automation (so you can see who was emailed and any errors)
+router.get('/automations/:id/sends', async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT s.email, s.status, s.error, s.created_at, s.sent_at, c.name
+     FROM automation_sends s LEFT JOIN customers c ON c.id = s.customer_id
+     WHERE s.automation_id = $1 AND s.business_id = $2 ORDER BY s.id DESC LIMIT 25`,
+    [req.params.id, req.businessId]
+  );
+  res.json(rows.map(r => ({ name: r.name, email: r.email, status: r.status, error: r.error, at: r.sent_at || r.created_at })));
+});
+
 // ---------- analytics ----------
 router.get('/analytics', async (req, res) => {
   const [campaigns, stats] = await Promise.all([
-    pool.query(`SELECT * FROM campaigns WHERE business_id = $1 AND status IN ('sent','failed','sending') ORDER BY created_at DESC`, [req.businessId]),
+    pool.query(`SELECT * FROM campaigns WHERE business_id = $1 AND (status IN ('sent','failed','sending') OR (status = 'automation' AND sent_count > 0)) ORDER BY created_at DESC`, [req.businessId]),
     pool.query(CAMPAIGN_STATS_SQL, [req.businessId]),
   ]);
   const byId = Object.fromEntries(stats.rows.map(r => [r.campaign_id, r]));
