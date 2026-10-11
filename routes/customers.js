@@ -3,24 +3,9 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 
-// Classifies a customer from their REAL order behavior — this replaces the
-// old approach of storing a tag once at signup ('New') and never touching
-// it again. Priority matters here: a customer who's gone quiet is flagged
-// "At Risk" even if they used to be a big spender, since that's the one
-// that actually needs the merchant's attention. Thresholds are a starting
-// point, easy to adjust:
-//   At Risk — has ordered before, but nothing in the last 60 days
-//   VIP     — ₦100,000+ total spend, or 5+ orders (and not gone quiet)
-//   Frequent— 2+ orders, most recent within 30 days
-//   New     — everything else (no orders yet, or just getting started)
-function computeTag({ orderCount, spend, lastOrderDate }) {
-  const daysSinceLastOrder = lastOrderDate ? (Date.now() - new Date(lastOrderDate).getTime()) / 86400000 : null;
-
-  if (orderCount >= 1 && daysSinceLastOrder !== null && daysSinceLastOrder > 60) return 'At Risk';
-  if (spend >= 100000 || orderCount >= 5) return 'VIP';
-  if (orderCount >= 2 && daysSinceLastOrder !== null && daysSinceLastOrder <= 30) return 'Frequent';
-  return 'New';
-}
+// Tag rules (New / Frequent / VIP / At Risk) live in db/segments.js so the Customers tab
+// and the Marketing segments always agree.
+const { computeTag } = require('../db/segments');
 
 // Computes orderCount/spend/lastOrderDate live from the orders table, then
 // derives a fresh tag from those real numbers — same approach as the

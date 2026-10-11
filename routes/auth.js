@@ -10,11 +10,19 @@ const jwt = require('jsonwebtoken');
 const pool = require('../db/pool');
 
 const router = express.Router();
+const { sendPasswordResetEmail } = require('../db/email');
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-this-in-production';
+if (!process.env.JWT_SECRET) {
+  // Anyone who can read this source could forge a login token for ANY business
+  // if the default secret is used. Set JWT_SECRET (a long random string) in
+  // the host's environment variables.
+  console.warn('\n!!! WARNING: JWT_SECRET is not set — using the insecure built-in default. Set JWT_SECRET before real users sign up. !!!\n');
+}
 
 // POST /api/auth/signup — creates a business AND its first user together
 router.post('/signup', async (req, res) => {
-  const { businessName, email, password } = req.body;
+  const { businessName, password } = req.body;
+  const email = (req.body.email || '').trim();
   if (!businessName || !email || !password) {
     return res.status(400).json({ error: 'businessName, email, and password are required' });
   }
@@ -60,7 +68,8 @@ router.post('/signup', async (req, res) => {
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
-  const { email, password } = req.body;
+  const { password } = req.body;
+  const email = (req.body.email || '').trim();
   if (!email || !password) return res.status(400).json({ error: 'email and password are required' });
 
   try {
@@ -85,46 +94,51 @@ router.post('/login', async (req, res) => {
 });
 
 // POST /api/auth/forgot-password
-// Generates a one-time reset token. IMPORTANT HONEST NOTE: this project has
-// no email service connected yet, so instead of emailing the token, we
-// return it directly in the API response for now — good enough to build
-// and test the real reset mechanism, but NOT how this should work once
-// real people are using this for real businesses. Wiring up an email
-// service (e.g. Resend, which has a free tier) to actually deliver this
-// token by email is the natural next step.
+// Generates a one-time reset token (1 hour, single use) and EMAILS a reset
+// link to the account's address. The raw token is never returned in the API
+// response — otherwise anyone could reset anybody's password just by
+// knowing their email. The one exception is local development: set
+// ALLOW_DEV_RESET_TOKEN=true to get the token in the response (and the
+// server console) when you have no mail service configured.
 router.post('/forgot-password', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'email is required' });
+  const message = 'If that email has an account, we\'ve sent reset instructions to it.';
 
-  const userResult = await pool.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
+  const userResult = await pool.query('SELECT id FROM users WHERE email = $1', [email.trim().toLowerCase()]);
   const user = userResult.rows[0];
 
   // Always respond the same way whether or not the email exists — this
   // stops someone from using this endpoint to discover which emails are
   // registered on the system.
-  if (!user) {
-    return res.json({ message: 'If that email exists, reset instructions have been generated.' });
-  }
+  if (!user) return res.json({ message });
 
   const rawToken = crypto.randomBytes(32).toString('hex'); // the real, unhashed token
   const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex'); // what we store
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
 
+  // Invalidate any earlier, still-unused tokens for this user
+  await pool.query('UPDATE password_resets SET used = true WHERE user_id = $1 AND used = false', [user.id]);
   await pool.query(
     'INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
     [user.id, tokenHash, expiresAt]
   );
 
-  console.log(`[DEV ONLY] Password reset token for ${email}: ${rawToken}`);
-  res.json({
-    message: 'If that email exists, reset instructions have been generated.',
-    devToken: rawToken, // see the honest note above — remove this once real email is wired up
-  });
+  const dashboardUrl = (process.env.DASHBOARD_URL || '').replace(/\/+$/, '');
+  const resetLink = dashboardUrl ? `${dashboardUrl}/?reset=${rawToken}` : null;
+  sendPasswordResetEmail({ to: email.trim().toLowerCase(), resetLink, token: rawToken }).catch(() => {});
+
+  if (process.env.ALLOW_DEV_RESET_TOKEN === 'true') {
+    console.log(`[DEV ONLY] Password reset token for ${email}: ${rawToken}`);
+    return res.json({ message, devToken: rawToken });
+  }
+  res.json({ message });
 });
 
 // POST /api/auth/reset-password
 router.post('/reset-password', async (req, res) => {
-  const { token, newPassword } = req.body;
+  const token = req.body.token;
+  const newPassword = req.body.newPassword || req.body.password; // admin.html sends `password`
   if (!token || !newPassword) return res.status(400).json({ error: 'token and newPassword are required' });
   if (newPassword.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
 

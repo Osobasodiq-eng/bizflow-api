@@ -59,12 +59,37 @@ async function resolveDeliveryFee(client, businessId, deliveryZoneId) {
 // both the manual "place order, seller confirms payment later" flow AND the
 // real-payment flow (called only after Paystack confirms money moved), so
 // an order created either way ends up identical in the database.
-async function createOrderFromItems(client, { businessId, customer, items, delivery, deliveryFee, paymentStatus, paystackReference }) {
-  const custResult = await client.query(
-    `INSERT INTO customers (business_id, name, phone, email, location, tag) VALUES ($1, $2, $3, $4, $5, 'New') RETURNING id`,
-    [businessId, customer.name, customer.phone, customer.email || null, customer.location || 'Unknown']
+async function createOrderFromItems(client, { businessId, customer, items, delivery, deliveryFee, paymentStatus, paystackReference, campaignId }) {
+  // A returning buyer (same phone number, ignoring spaces/dashes) is the SAME customer —
+  // otherwise every purchase would create a duplicate and "repeat customer", VIP and
+  // marketing segments could never work. Their email/location are refreshed to the latest.
+  const phone = String(customer.phone).trim();
+  const existingCust = await client.query(
+    `SELECT id FROM customers WHERE business_id = $1 AND regexp_replace(phone, '[\\s-]', '', 'g') = regexp_replace($2, '[\\s-]', '', 'g') ORDER BY id LIMIT 1`,
+    [businessId, phone]
   );
-  const resolvedCustomerId = custResult.rows[0].id;
+  let resolvedCustomerId;
+  if (existingCust.rows[0]) {
+    resolvedCustomerId = existingCust.rows[0].id;
+    await client.query(
+      `UPDATE customers SET email = COALESCE($1, email), location = COALESCE($2, location) WHERE id = $3`,
+      [customer.email || null, customer.location || null, resolvedCustomerId]
+    );
+  } else {
+    const custResult = await client.query(
+      `INSERT INTO customers (business_id, name, phone, email, location, tag) VALUES ($1, $2, $3, $4, $5, 'New') RETURNING id`,
+      [businessId, customer.name, phone, customer.email || null, customer.location || 'Unknown']
+    );
+    resolvedCustomerId = custResult.rows[0].id;
+  }
+
+  // Which marketing campaign's link the buyer came through (if any). Only accepted when it
+  // really is one of THIS store's campaigns — never trust an ID from the browser blindly.
+  let attributedCampaignId = null;
+  if (campaignId && Number.isInteger(Number(campaignId))) {
+    const camp = await client.query('SELECT id FROM campaigns WHERE id = $1 AND business_id = $2', [Number(campaignId), businessId]);
+    if (camp.rows[0]) attributedCampaignId = camp.rows[0].id;
+  }
 
   let itemsTotal = 0;
   const orderItems = [];
@@ -126,9 +151,9 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
   const amount = itemsTotal + deliveryFee;
 
   const orderResult = await client.query(
-    `INSERT INTO orders (business_id, customer_id, items, amount, payment_status, status, delivery, paystack_reference)
-     VALUES ($1, $2, $3, $4, $5, 'New', $6, $7) RETURNING *`,
-    [businessId, resolvedCustomerId, JSON.stringify(orderItems), amount, paymentStatus, delivery || null, paystackReference || null]
+    `INSERT INTO orders (business_id, customer_id, items, amount, payment_status, status, delivery, paystack_reference, campaign_id)
+     VALUES ($1, $2, $3, $4, $5, 'New', $6, $7, $8) RETURNING *`,
+    [businessId, resolvedCustomerId, JSON.stringify(orderItems), amount, paymentStatus, delivery || null, paystackReference || null, attributedCampaignId]
   );
   const newOrderId = orderResult.rows[0].id;
 
@@ -160,7 +185,7 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
     // sendOrderStatusEmail already swallows its own errors internally too.
     sendOrderStatusEmail({
       to: customer.email, storeName: bizResult.rows[0]?.name,
-      orderId: orderCode, status: 'New', amount,
+      orderId: orderCode, status: 'New', amount, businessId,
     }).catch(() => {});
   }
 
@@ -254,7 +279,7 @@ router.post('/:businessId/orders', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
-  const { customer, items, delivery, deliveryZoneId } = req.body;
+  const { customer, items, delivery, deliveryZoneId, campaignId } = req.body;
   if (!items || !items.length) return res.status(400).json({ error: 'items are required' });
   if (!customer || !customer.name || !customer.phone) {
     return res.status(400).json({ error: 'customer name and phone are required' });
@@ -268,7 +293,7 @@ router.post('/:businessId/orders', async (req, res) => {
 
     const deliveryFee = await resolveDeliveryFee(client, businessId, deliveryZoneId);
     const result = await createOrderFromItems(client, {
-      businessId, customer, items, delivery, deliveryFee, paymentStatus: 'Awaiting',
+      businessId, customer, items, delivery, deliveryFee, paymentStatus: 'Awaiting', campaignId,
     });
 
     await client.query('COMMIT');
@@ -291,7 +316,7 @@ router.post('/:businessId/checkout/initialize', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
-  const { customer, items, delivery, deliveryZoneId, callbackUrl } = req.body;
+  const { customer, items, delivery, deliveryZoneId, callbackUrl, campaignId } = req.body;
   if (!items || !items.length) return res.status(400).json({ error: 'items are required' });
   if (!customer || !customer.name || !customer.phone || !customer.email) {
     return res.status(400).json({ error: 'customer name, phone, and email are required' });
@@ -339,7 +364,7 @@ router.post('/:businessId/checkout/initialize', async (req, res) => {
         amount: Math.round(amount * 100), // Paystack expects kobo, not naira
         subaccount: business.paystack_subaccount_code,
         callback_url: callbackUrl || undefined,
-        metadata: { businessId, customer, items, delivery, deliveryZoneId },
+        metadata: { businessId, customer, items, delivery, deliveryZoneId, campaignId },
       }),
     });
 
@@ -352,67 +377,97 @@ router.post('/:businessId/checkout/initialize', async (req, res) => {
   }
 });
 
-// GET /api/public/:businessId/checkout/verify/:reference
-// Called after the buyer is redirected back from Paystack. Verifies the
-// payment DIRECTLY with Paystack (never trusts the redirect alone — a
-// buyer could reach this URL without ever actually paying), and only THEN
-// creates the real order. Safe to call more than once for the same
-// reference (e.g. a page reload) — returns the existing order instead of
-// creating a duplicate.
-router.get('/:businessId/checkout/verify/:reference', async (req, res) => {
-  const businessId = parseBusinessId(req.params.businessId);
-  if (!businessId) return res.status(404).json({ error: 'Store not found' });
-  const { reference } = req.params;
+// Turns a Paystack payment reference into a real order — exactly once, no
+// matter how many times or from where it is called. Used by BOTH the buyer's
+// redirect back from Paystack (verify route below) AND Paystack's own
+// webhook (routes/paystack-webhook.js), so an order is still created if the
+// buyer pays and then closes the tab before being redirected back.
+//
+// Verifies the payment DIRECTLY with Paystack (never trusts the redirect or
+// the caller alone). Pass expectedBusinessId when the caller knows which
+// store it is for (the redirect does); the webhook passes null and relies on
+// the businessId Paystack echoes back from our own initialize call.
+// Returns { status, body } ready to send as an HTTP response.
+async function fulfillPaystackReference(reference, expectedBusinessId) {
+  const findExisting = async (db) => {
+    const r = await db.query(
+      'SELECT id, items, amount, payment_status, business_id FROM orders WHERE paystack_reference = $1',
+      [reference]
+    );
+    const o = r.rows[0];
+    if (!o) return null;
+    if (expectedBusinessId && o.business_id !== expectedBusinessId) return null;
+    return {
+      status: 200,
+      body: {
+        id: `BF-${String(o.id).padStart(4, '0')}`, amount: Number(o.amount),
+        items: o.items, status: 'New', paymentStatus: o.payment_status, alreadyProcessed: true,
+      },
+    };
+  };
+
+  const already = await findExisting(pool);
+  if (already) return already;
+
+  const verifyRes = await paystackFetch(`/transaction/verify/${encodeURIComponent(reference)}`);
+  if (verifyRes.data.status !== 'success') {
+    return { status: 400, body: { error: 'Payment was not successful' } };
+  }
+
+  const meta = verifyRes.data.metadata;
+  const businessId = meta && Number(meta.businessId);
+  if (!businessId || (expectedBusinessId && businessId !== expectedBusinessId)) {
+    return { status: 400, body: { error: 'This payment does not belong to this store' } };
+  }
 
   const client = await pool.connect();
   try {
-    // Already processed this reference? Return the same result instead of
-    // creating a second order for the same payment.
-    const existing = await client.query(
-      'SELECT id, items, amount, payment_status FROM orders WHERE paystack_reference = $1 AND business_id = $2',
-      [reference, businessId]
-    );
-    if (existing.rows[0]) {
-      const o = existing.rows[0];
-      return res.json({
-        id: `BF-${String(o.id).padStart(4, '0')}`, amount: Number(o.amount),
-        items: o.items, status: 'New', paymentStatus: o.payment_status, alreadyProcessed: true,
-      });
-    }
-
-    const verifyRes = await paystackFetch(`/transaction/verify/${encodeURIComponent(reference)}`);
-    if (verifyRes.data.status !== 'success') {
-      return res.status(400).json({ error: 'Payment was not successful' });
-    }
-
-    const meta = verifyRes.data.metadata;
-    if (!meta || Number(meta.businessId) !== businessId) {
-      return res.status(400).json({ error: 'This payment does not belong to this store' });
-    }
-
     await client.query('BEGIN');
     const deliveryFee = await resolveDeliveryFee(client, businessId, meta.deliveryZoneId);
     const result = await createOrderFromItems(client, {
       businessId, customer: meta.customer, items: meta.items, delivery: meta.delivery,
-      deliveryFee, paymentStatus: 'Paid', paystackReference: reference,
+      deliveryFee, paymentStatus: 'Paid', paystackReference: reference, campaignId: meta.campaignId,
     });
 
     // Defense in depth: confirm what we actually charged for matches what
     // Paystack actually collected, in case of a rare race condition (e.g.
-    // stock/price changed between initialize and verify).
+    // stock/price changed between initialize and verify). The money has
+    // already moved, so we keep the order but make noise in the logs.
     if (Math.round(result.amount * 100) !== verifyRes.data.amount) {
-      console.error(`Amount mismatch on reference ${reference}: expected ${result.amount * 100}, Paystack charged ${verifyRes.data.amount}`);
+      console.error(`Amount mismatch on reference ${reference}: order total ${result.amount * 100}, Paystack collected ${verifyRes.data.amount}`);
     }
 
     await client.query('COMMIT');
-    res.status(201).json(result);
+    return { status: 201, body: result };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    console.error('Checkout verify error:', err);
-    res.status(400).json({ error: err.message || 'Could not verify payment' });
+    // Two requests (redirect + webhook) raced and the other one won: the
+    // UNIQUE paystack_reference stopped a duplicate order. Return the winner's.
+    if (err.code === '23505') {
+      const winner = await findExisting(pool);
+      if (winner) return winner;
+    }
+    console.error('Checkout fulfil error:', err);
+    return { status: err.status || 400, body: { error: err.message || 'Could not verify payment' } };
   } finally {
     client.release();
   }
+}
+
+// GET /api/public/:businessId/checkout/verify/:reference
+// Called after the buyer is redirected back from Paystack. Safe to call more
+// than once for the same reference (e.g. a page reload).
+router.get('/:businessId/checkout/verify/:reference', async (req, res) => {
+  const businessId = parseBusinessId(req.params.businessId);
+  if (!businessId) return res.status(404).json({ error: 'Store not found' });
+  try {
+    const { status, body } = await fulfillPaystackReference(req.params.reference, businessId);
+    res.status(status).json(body);
+  } catch (err) {
+    console.error('Checkout verify error:', err);
+    res.status(400).json({ error: err.message || 'Could not verify payment' });
+  }
 });
 
+router.fulfillPaystackReference = fulfillPaystackReference;
 module.exports = router;
