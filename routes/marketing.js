@@ -298,4 +298,115 @@ router.get('/analytics', async (req, res) => {
   });
 });
 
+
+// ---------- content calendar ----------
+const CONTENT_CHANNELS = ['instagram', 'whatsapp', 'facebook', 'tiktok', 'other'];
+const shapePost = r => ({ id: r.id, date: r.post_date, channel: r.channel, title: r.title, caption: r.caption || '', status: r.status });
+
+function readPost(body, partial) {
+  const bad = message => { throw { status: 400, message }; };
+  const out = {};
+  if (!partial || body.date !== undefined) { if (!/^\d{4}-\d{2}-\d{2}$/.test(String(body.date || ''))) bad('Pick a date'); out.post_date = body.date; }
+  if (!partial || body.title !== undefined) { const v = String(body.title || '').trim(); if (!v) bad('Give the post a title'); if (v.length > 120) bad('Title is too long (120 characters max)'); out.title = v; }
+  if (body.caption !== undefined) { const v = String(body.caption || '').trim(); if (v.length > 3000) bad('Caption is too long (3,000 characters max)'); out.caption = v; }
+  if (body.channel !== undefined) { if (!CONTENT_CHANNELS.includes(body.channel)) bad('Pick a channel'); out.channel = body.channel; }
+  if (body.status !== undefined) { if (!['planned', 'posted'].includes(body.status)) bad('Invalid status'); out.status = body.status; }
+  return out;
+}
+
+// ?month=YYYY-MM
+router.get('/content', async (req, res) => {
+  const m = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : new Date().toISOString().slice(0, 7);
+  const { rows } = await pool.query(
+    `SELECT id, to_char(post_date, 'YYYY-MM-DD') AS post_date, channel, title, caption, status FROM content_posts
+     WHERE business_id = $1 AND post_date >= ($2::text || '-01')::date AND post_date < (($2::text || '-01')::date + interval '1 month')
+     ORDER BY post_date, id`, [req.businessId, m]);
+  res.json(rows.map(shapePost));
+});
+
+router.post('/content', async (req, res) => {
+  try {
+    const f = readPost(req.body, false);
+    const { rows: [r] } = await pool.query(
+      `INSERT INTO content_posts (business_id, post_date, channel, title, caption) VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, to_char(post_date, 'YYYY-MM-DD') AS post_date, channel, title, caption, status`,
+      [req.businessId, f.post_date, f.channel || 'instagram', f.title, f.caption || '']);
+    res.status(201).json(shapePost(r));
+  } catch (err) { fail(res, err); }
+});
+
+router.patch('/content/:id', async (req, res) => {
+  try {
+    const f = readPost(req.body, true);
+    const keys = Object.keys(f);
+    if (!keys.length) return res.status(400).json({ error: 'Nothing to update' });
+    const vals = keys.map(k => f[k]); vals.push(req.params.id, req.businessId);
+    const { rows: [r] } = await pool.query(
+      `UPDATE content_posts SET ${keys.map((k, i) => `${k} = $${i + 1}`).join(', ')} WHERE id = $${keys.length + 1} AND business_id = $${keys.length + 2}
+       RETURNING id, to_char(post_date, 'YYYY-MM-DD') AS post_date, channel, title, caption, status`, vals);
+    if (!r) return res.status(404).json({ error: 'Post not found' });
+    res.json(shapePost(r));
+  } catch (err) { fail(res, err); }
+});
+
+router.delete('/content/:id', async (req, res) => {
+  await pool.query('DELETE FROM content_posts WHERE id = $1 AND business_id = $2', [req.params.id, req.businessId]);
+  res.status(204).end();
+});
+
+// ---------- caption writer ----------
+// Uses Claude when ANTHROPIC_API_KEY is set; otherwise falls back to a simple template so the button always works.
+const captionUse = new Map(); // businessId -> [timestamps]; keeps one shop from running up the bill
+function captionAllowed(id) {
+  const now = Date.now(), list = (captionUse.get(id) || []).filter(t => now - t < 3600e3);
+  if (list.length >= 20) return false;
+  list.push(now); captionUse.set(id, list); return true;
+}
+const CHANNEL_HINT = { instagram: 'an Instagram post (friendly, a few emojis, 5-8 relevant hashtags at the end)', whatsapp: 'a short WhatsApp status (1-3 lines, no hashtags)', facebook: 'a Facebook post (conversational, 1-2 short paragraphs, at most 2 hashtags)', tiktok: 'a TikTok caption (punchy, one hook line, 3-5 hashtags)', other: 'a social media post' };
+
+function templateCaption({ store, title, product, channel }) {
+  const what = product ? `${product.name}${product.price ? ` — ₦${Number(product.price).toLocaleString()}` : ''}` : title;
+  const tags = channel === 'whatsapp' ? '' : `\n\n#${store.replace(/[^A-Za-z0-9]/g, '')} #shopnow #newarrivals`;
+  return `✨ ${what}\n\n${product && product.description ? product.description.slice(0, 160) + '\n\n' : ''}Order now from ${store} — link in bio! 🛍️${tags}`;
+}
+
+router.post('/content/caption', async (req, res) => {
+  try {
+    if (!captionAllowed(req.businessId)) return res.status(429).json({ error: 'You\'ve used the caption writer a lot this hour. Try again a little later.' });
+    const channel = CONTENT_CHANNELS.includes(req.body.channel) ? req.body.channel : 'instagram';
+    const title = String(req.body.title || '').trim().slice(0, 120);
+    const notes = String(req.body.notes || '').trim().slice(0, 300);
+    const { rows: [biz] } = await pool.query('SELECT name FROM businesses WHERE id = $1', [req.businessId]);
+    let product = null;
+    if (req.body.productId) {
+      const { rows: [pr] } = await pool.query('SELECT name, price, description, category FROM products WHERE id = $1 AND business_id = $2', [Number(req.body.productId) || 0, req.businessId]);
+      product = pr || null;
+    }
+    if (!title && !product) return res.status(400).json({ error: 'Add a title or pick a product first.' });
+    const store = (biz && biz.name) || 'our store';
+
+    const key = process.env.ANTHROPIC_API_KEY;
+    if (!key) return res.json({ caption: templateCaption({ store, title, product, channel }), source: 'template' });
+
+    const prompt = `Write ${CHANNEL_HINT[channel]} for a small online shop called "${store}".\n`
+      + (product ? `Product: ${product.name}. Price: ₦${Number(product.price).toLocaleString()}. ${product.description ? 'Details: ' + product.description.slice(0, 400) + '.' : ''}\n` : '')
+      + (title ? `Post idea: ${title}\n` : '') + (notes ? `Extra notes from the owner: ${notes}\n` : '')
+      + 'Write in simple, warm English suited to Nigerian customers. Do not invent discounts, prices or claims that were not given. Mention that people can order through the link in bio. Reply with ONLY the caption text.';
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || 'claude-haiku-5-5', max_tokens: 500, messages: [{ role: 'user', content: prompt }] }),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!r.ok) {
+      console.error('Caption writer failed:', r.status, (await r.text()).slice(0, 300));
+      return res.json({ caption: templateCaption({ store, title, product, channel }), source: 'template' }); // never leave the owner stuck
+    }
+    const data = await r.json();
+    const text = ((data.content || []).find(b => b.type === 'text') || {}).text;
+    res.json({ caption: (text || '').trim() || templateCaption({ store, title, product, channel }), source: text ? 'ai' : 'template' });
+  } catch (err) { fail(res, err); }
+});
+
+
 module.exports = router;
