@@ -17,6 +17,9 @@
 // is fine for testing with a handful of real addresses; a verified custom
 // domain removes that limit later.
 
+// EU-region Mailgun accounts must use https://api.eu.mailgun.net — set MAILGUN_BASE_URL for those.
+const MAILGUN_BASE = (process.env.MAILGUN_BASE_URL || 'https://api.mailgun.net').replace(/\/+$/, '');
+
 const STATUS_CONTENT = {
   New:        { subject: 'Order confirmed', heading: 'Your order is confirmed!', body: "We've received your order and the seller has been notified. We'll keep you posted as it moves along." },
   Processing: { subject: 'Order update: being prepared', heading: 'Your order is being prepared', body: 'The seller is getting your order ready.' },
@@ -76,7 +79,7 @@ async function sendOrderStatusEmail({ to, storeName, orderId, status, amount, co
     `);
 
     const auth = Buffer.from(`api:${process.env.MAILGUN_API_KEY}`).toString('base64');
-    const res = await fetch(`https://api.mailgun.net/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
+    const res = await fetch(`${MAILGUN_BASE}/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
       method: 'POST',
       headers: {
         Authorization: `Basic ${auth}`,
@@ -87,7 +90,7 @@ async function sendOrderStatusEmail({ to, storeName, orderId, status, amount, co
     });
     if (!res.ok) {
       const err = await res.text();
-      console.error(`Order email failed for ${orderId} (${status}):`, err);
+      console.error(`Order email failed for ${orderId} (${status}) — Mailgun said HTTP ${res.status}:`, err);
       return { sent: false, reason: 'send_failed' };
     }
     return { sent: true };
@@ -122,7 +125,7 @@ async function sendPasswordResetEmail({ to, resetLink, token }) {
         <p style="color:#9CA3AF;font-size:12px;margin-top:28px;">Didn't ask for this? You can ignore this email — your password won't change.</p>
       </div>`);
     const auth = Buffer.from(`api:${process.env.MAILGUN_API_KEY}`).toString('base64');
-    const res = await fetch(`https://api.mailgun.net/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
+    const res = await fetch(`${MAILGUN_BASE}/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
       method: 'POST',
       headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: form.toString(),
@@ -133,4 +136,43 @@ async function sendPasswordResetEmail({ to, resetLink, token }) {
   }
 }
 
-module.exports = { sendOrderStatusEmail, sendPasswordResetEmail };
+const emailConfigured = () => !!(process.env.MAILGUN_API_KEY && process.env.MAILGUN_DOMAIN);
+
+// Sends one marketing email. Returns { sent, reason?, detail? } and never throws.
+// Includes the List-Unsubscribe headers that mailbox providers expect on bulk mail.
+async function sendMarketingEmail({ to, fromName, subject, html, text, unsubscribeUrl, tag, replyTo }) {
+  if (!to) return { sent: false, reason: 'no_email' };
+  if (!emailConfigured()) return { sent: false, reason: 'not_configured' };
+  try {
+    const form = new URLSearchParams();
+    form.append('from', `${String(fromName || 'Kooza Store').replace(/[<>"]/g, '')} <postmaster@${process.env.MAILGUN_DOMAIN}>`);
+    form.append('to', to);
+    form.append('subject', subject);
+    form.append('html', html);
+    if (text) form.append('text', text);
+    if (tag) form.append('o:tag', tag);
+    if (replyTo) form.append('h:Reply-To', replyTo); // so customers' replies reach the merchant, not a no-reply mailbox
+    if (unsubscribeUrl) {
+      form.append('h:List-Unsubscribe', `<${unsubscribeUrl}>`);
+      form.append('h:List-Unsubscribe-Post', 'List-Unsubscribe=One-Click');
+    }
+    const auth = Buffer.from(`api:${process.env.MAILGUN_API_KEY}`).toString('base64');
+    const res = await fetch(`${MAILGUN_BASE}/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 300);
+      console.error(`Marketing email to ${to} failed — Mailgun said HTTP ${res.status}:`, detail);
+      return { sent: false, reason: 'send_failed', detail: `HTTP ${res.status}: ${detail}` };
+    }
+    return { sent: true };
+  } catch (err) {
+    console.error(`Marketing email to ${to} failed:`, err.message);
+    return { sent: false, reason: 'send_failed', detail: err.message };
+  }
+}
+
+module.exports = { sendOrderStatusEmail, sendPasswordResetEmail, sendMarketingEmail, emailConfigured, esc };
