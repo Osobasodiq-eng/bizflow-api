@@ -6,6 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
+const { limitGuard } = require('../db/billing');
 const { logInventoryChange } = require('../db/inventoryLog');
 
 router.get('/summary', async (req, res) => {
@@ -109,6 +110,7 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   const { name, cost, price, quantity, threshold, category, image_url, description, specifications } = req.body;
   if (!name || cost == null || price == null) return res.status(400).json({ error: 'name, cost, and price are required' });
+  if (!(await limitGuard(req, res, 'products'))) return; // plan limit
 
   const startQty = quantity ?? 0;
   const { rows } = await pool.query(
@@ -196,6 +198,7 @@ function parsePackedSpecs(raw) {
 router.post('/import', async (req, res) => {
   const rows = req.body.rows;
   if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'rows array is required' });
+  if (!(await limitGuard(req, res, 'products', rows.length))) return; // plan limit
 
   let created = 0;
   const errors = [];

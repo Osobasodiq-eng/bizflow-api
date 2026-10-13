@@ -10,6 +10,14 @@ const { SEGMENTS, SEGMENT_KEYS, loadCustomerStats, membersOf, isReachable } = re
 const { startCampaign, sendInBackground, buildEmail } = require('../db/campaigns');
 const { sendMarketingEmail, emailConfigured } = require('../db/email');
 const { KINDS, ensureAutomations } = require('../db/automations');
+const { requireFeature } = require('../db/billing');
+
+// Plan gates: Marketing is on Growth+, Automations on Pro, the content calendar on Growth+. Free plans get a 402 the dashboard turns into an upgrade card.
+router.use((req, res, next) => {
+  if (req.path.startsWith('/content')) return requireFeature('content')(req, res, next);
+  if (req.path.startsWith('/automations') && req.method !== 'GET') return requireFeature('automations')(req, res, next);
+  return requireFeature('marketing')(req, res, next);
+});
 
 const EMAIL_NOT_SET_UP = 'Email isn\'t set up on the server yet (Mailgun). Add MAILGUN_API_KEY and MAILGUN_DOMAIN, then try again.';
 
@@ -42,7 +50,7 @@ function readScheduleTime(value) {
   return t;
 }
 const fail = (res, err) => {
-  if (err && err.status) return res.status(err.status).json({ error: err.message });
+  if (err && err.status) return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code, requiredPlan: err.requiredPlan, limit: err.limit, feature: err.feature } : {}) });
   throw err;
 };
 

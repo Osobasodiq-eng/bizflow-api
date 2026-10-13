@@ -4,6 +4,10 @@ const router = express.Router();
 const pool = require('../db/pool');
 const { CHANNELS, sendReply } = require('../db/inbox');
 const { inboxAddress, inboundEnabled, emailConfigured } = require('../db/email');
+const { requireFeature, hasFeature } = require('../db/billing');
+
+// The inbox is a Growth+ feature. Messages keep arriving (nothing is lost) but reading/replying needs the plan; /summary stays open for the badge + upgrade card.
+router.use((req, res, next) => (req.method === 'GET' && req.path === '/summary') ? next() : requireFeature('inbox')(req, res, next));
 
 const fail = (res, err) => {
   if (err && err.status) return res.status(err.status).json({ error: err.message });
@@ -44,6 +48,7 @@ router.get('/summary', async (req, res) => {
     byChannel,
     email: { configured: emailConfigured(), address: inboxAddress(req.businessId), receiving: inboundEnabled() },
     channels: Object.entries(CHANNELS).map(([key, c]) => ({ key, label: c.label, ready: c.canReply })),
+    locked: !(await hasFeature(req.businessId, 'inbox')),
   });
 });
 

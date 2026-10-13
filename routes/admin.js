@@ -8,6 +8,8 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
+const billing = require('../db/billing');
+const { PLANS } = require('../db/plans');
 
 // GET /api/admin/stats — platform-wide totals + health metrics for the top of the dashboard
 router.get('/stats', async (req, res) => {
@@ -74,6 +76,9 @@ router.get('/stats', async (req, res) => {
 // each computed live (not stored/cached) so it's always accurate
 router.get('/businesses', async (req, res) => {
   const { rows: businesses } = await pool.query('SELECT * FROM businesses ORDER BY created_at DESC');
+  // Read-only look at subscriptions (opening this page never starts anyone's trial clock)
+  const { rows: subRows } = await pool.query('SELECT * FROM subscriptions');
+  const subs = new Map(subRows.map(r => [r.business_id, r]));
   const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
   const withStats = await Promise.all(businesses.map(async (b) => {
@@ -97,6 +102,7 @@ router.get('/businesses', async (req, res) => {
       name: b.name,
       ownerEmail: users.rows[0]?.email || '(no user)',
       createdAt: b.created_at,
+      ...(() => { const sub = subs.get(b.id); if (!sub) return { plan: 'free', planState: 'not_started', planName: 'Starter', periodEnd: null }; const r = billing.resolve(sub); return { plan: r.plan, planState: r.state, planName: PLANS[r.plan].name, periodEnd: sub.current_period_end || sub.trial_ends_at }; })(),
       productCount: Number(products.rows[0].count),
       customerCount: Number(customers.rows[0].count),
       orderCount,
@@ -111,6 +117,34 @@ router.get('/businesses', async (req, res) => {
   }));
 
   res.json(withStats);
+});
+
+// GET /api/admin/billing — what Kooza earns: paying merchants, monthly recurring revenue, latest payments
+router.get('/billing', async (req, res) => {
+  const { rows: subRows } = await pool.query(`SELECT * FROM subscriptions`);
+  let mrr = 0; const counts = { free: 0, growth: 0, pro: 0, trial: 0 };
+  for (const sub of subRows) {
+    const r = billing.resolve(sub);
+    if (r.state === 'trial') { counts.trial++; continue; }
+    counts[r.plan]++;
+    if (r.plan !== 'free' && sub.authorization_code && !sub.cancel_at_period_end) {
+      mrr += sub.billing_interval === 'yearly' ? PLANS[r.plan].price.yearly / 12 : PLANS[r.plan].price.monthly;
+    }
+  }
+  const { rows: recent } = await pool.query(
+    `SELECT p.plan, p.amount, p.method, p.created_at, b.name FROM subscription_payments p JOIN businesses b ON b.id = p.business_id ORDER BY p.created_at DESC LIMIT 10`);
+  res.json({ mrr: Math.round(mrr), counts, recent: recent.map(r => ({ business: r.name, plan: r.plan, amount: Number(r.amount), method: r.method, at: r.created_at })) });
+});
+
+// POST /api/admin/businesses/:id/plan { plan: 'free'|'growth'|'pro', days } — give a plan by hand (bank transfer, partner, goodwill)
+router.post('/businesses/:id/plan', async (req, res) => {
+  try {
+    await billing.adminSetPlan(Number(req.params.id), String(req.body.plan), req.body.days);
+    res.json({ ok: true });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
 });
 
 // GET /api/admin/businesses/:id/timeseries?days=30 — one store's daily order
