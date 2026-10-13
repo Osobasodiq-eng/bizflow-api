@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const pool = require('./pool');
 const { sendMarketingEmail, esc, inboxAddress, inboundEnabled } = require('./email');
 const { loadCustomerStats, membersOf, isReachable } = require('./segments');
+const { notify } = require('./notifications');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-this-in-production';
 const CONCURRENCY = 5;
@@ -150,6 +151,11 @@ async function processCampaign(campaignId) {
       `UPDATE campaigns SET status = $2, sent_count = $3, failed_count = $4, sent_at = now() WHERE id = $1`,
       [campaignId, sent === 0 && failed > 0 ? 'failed' : 'sent', sent, failed]
     );
+    notify(campaign.business_id, {
+      type: 'campaign', link: 'marketing',
+      title: sent === 0 && failed > 0 ? `Campaign “${campaign.name}” failed to send` : `Campaign “${campaign.name}” was sent`,
+      body: `${sent} email${sent === 1 ? '' : 's'} delivered${failed ? `, ${failed} failed` : ''}.`,
+    });
   } catch (err) {
     console.error(`Campaign ${campaignId} processing error:`, err);
   } finally {

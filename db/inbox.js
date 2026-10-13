@@ -5,6 +5,7 @@
 
 const pool = require('./pool');
 const { sendInboxEmail, emailConfigured } = require('./email');
+const { notify } = require('./notifications');
 
 const CHANNELS = {
   chat:      { label: 'Storefront chat', canReply: true },
@@ -60,6 +61,11 @@ async function recordInbound({ businessId, channel, handle, name, detail, subjec
      WHERE id = $1`,
     [conv.id, preview(text), externalId || null, subject || null]
   );
+  notify(businessId, {
+    type: 'message', link: 'inbox', dedupeKey: `conv-${conv.id}`,
+    title: `New message from ${conv.contact_name || conv.contact_detail || (channel === 'chat' ? 'a website visitor' : handle)}`,
+    body: preview(text),
+  });
   return { conversation: conv, message: msg, duplicate: false };
 }
 

@@ -313,3 +313,18 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_inbox_msg_external ON inbox_messages(conversation_id, external_id) WHERE external_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_inbox_msg_conv ON inbox_messages(conversation_id, id);
+
+-- ---- in-app notifications (the bell in the dashboard) ----
+CREATE TABLE IF NOT EXISTS notifications (
+  id SERIAL PRIMARY KEY,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,                  -- order | stock | message | campaign
+  title TEXT NOT NULL,
+  body TEXT,
+  link TEXT,                           -- dashboard page to open: orders | inventory | inbox | marketing
+  dedupe_key TEXT,                     -- while unread, the same key updates one row instead of piling up
+  read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_list ON notifications(business_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_notifications_unread_key ON notifications(business_id, dedupe_key) WHERE read_at IS NULL AND dedupe_key IS NOT NULL;
