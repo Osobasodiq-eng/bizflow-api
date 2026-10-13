@@ -71,7 +71,11 @@ webhookRouter.post('/', async (req, res) => {
   if (!ok) return res.sendStatus(401);
 
   const event = req.body || {};
-  if (event.event === 'charge.success' && event.data && event.data.reference) {
+  if (event.event === 'charge.success' && event.data && event.data.reference && event.data.metadata && event.data.metadata.kind === 'subscription') {
+    // A merchant paying Kooza for a plan (not a shopper paying a store) — verify with Paystack, then switch the plan on.
+    try { await require('./db/billing').verifyAndActivate(event.data.reference, null); }
+    catch (err) { console.error(`Webhook could not activate subscription ${event.data.reference}:`, err.message || err); }
+  } else if (event.event === 'charge.success' && event.data && event.data.reference) {
     try {
       const { status, body } = await require('./routes/public').fulfillPaystackReference(event.data.reference, null);
       if (status >= 400) console.error(`Webhook could not fulfil ${event.data.reference}:`, body.error);
@@ -134,6 +138,7 @@ app.use('/api/fulfilment', requireAuth, safe(require('./routes/fulfilment')));
 app.use('/api/marketing', requireAuth, safe(require('./routes/marketing')));
 app.use('/api/inbox', requireAuth, safe(require('./routes/inbox')));
 app.use('/api/notifications', requireAuth, safe(require('./routes/notifications')));
+app.use('/api/billing', requireAuth, safe(require('./routes/billing')));
 app.use('/api/customers', requireAuth, safe(require('./routes/customers')));
 app.use('/api/products', requireAuth, safe(require('./routes/inventory')));
 app.use('/api/imagekit', requireAuth, safe(require('./routes/imagekit')));
@@ -169,7 +174,8 @@ app.use((err, req, res, next) => {
 process.on('unhandledRejection', (reason) => console.error('Unhandled promise rejection:', reason));
 
 require('./db/campaigns').startScheduler(); // sends scheduled campaigns when they're due
-require('./db/automations').startAutomations(); // sends automated emails (win-back, post-purchase) when they're due
+require('./db/automations').startAutomations();
+require('./db/billing').startBilling(); // renews plans on saved cards, ends lapsed plans, reminds about trials // sends automated emails (win-back, post-purchase) when they're due
 
 app.listen(PORT, () => {
   console.log(`BizFlow API running at http://localhost:${PORT}`);
