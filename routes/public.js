@@ -19,6 +19,7 @@ const router = express.Router();
 const pool = require('../db/pool');
 const { logInventoryChange } = require('../db/inventoryLog');
 const { sendOrderStatusEmail } = require('../db/email');
+const { notifyStorefrontOrder } = require('../db/notifications');
 
 function parseBusinessId(raw) {
   const id = Number(raw);
@@ -297,6 +298,7 @@ router.post('/:businessId/orders', async (req, res) => {
     });
 
     await client.query('COMMIT');
+    notifyStorefrontOrder(businessId, result, customer && customer.name); // after COMMIT: never for a rolled-back order
     res.status(201).json(result);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -438,6 +440,7 @@ async function fulfillPaystackReference(reference, expectedBusinessId) {
     }
 
     await client.query('COMMIT');
+    notifyStorefrontOrder(businessId, result, meta.customer && meta.customer.name);
     return { status: 201, body: result };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
