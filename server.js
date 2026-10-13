@@ -133,6 +133,7 @@ app.use('/api/orders', requireAuth, safe(require('./routes/orders')));
 app.use('/api/fulfilment', requireAuth, safe(require('./routes/fulfilment')));
 app.use('/api/marketing', requireAuth, safe(require('./routes/marketing')));
 app.use('/api/inbox', requireAuth, safe(require('./routes/inbox')));
+app.use('/api/notifications', requireAuth, safe(require('./routes/notifications')));
 app.use('/api/customers', requireAuth, safe(require('./routes/customers')));
 app.use('/api/products', requireAuth, safe(require('./routes/inventory')));
 app.use('/api/imagekit', requireAuth, safe(require('./routes/imagekit')));
