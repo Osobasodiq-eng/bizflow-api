@@ -328,3 +328,35 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_list ON notifications(business_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_notifications_unread_key ON notifications(business_id, dedupe_key) WHERE read_at IS NULL AND dedupe_key IS NOT NULL;
+
+-- ---- subscriptions: merchants paying Kooza ----
+CREATE TABLE IF NOT EXISTS subscriptions (
+  business_id INTEGER PRIMARY KEY REFERENCES businesses(id) ON DELETE CASCADE,
+  plan TEXT NOT NULL DEFAULT 'free',                -- free | growth | pro (the plan they PAID for; during a trial the effective plan is Pro)
+  status TEXT NOT NULL DEFAULT 'trialing',          -- trialing | active | past_due | free
+  billing_interval TEXT NOT NULL DEFAULT 'monthly', -- monthly | yearly
+  trial_ends_at TIMESTAMPTZ,
+  current_period_end TIMESTAMPTZ,
+  cancel_at_period_end BOOLEAN NOT NULL DEFAULT false,
+  authorization_code TEXT,                          -- Paystack's reusable card token (the card number itself never touches our server)
+  card_brand TEXT, card_last4 TEXT, card_exp TEXT,
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  next_charge_at TIMESTAMPTZ,
+  trial_reminded BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_renewal ON subscriptions(status, current_period_end);
+
+CREATE TABLE IF NOT EXISTS subscription_payments (
+  id SERIAL PRIMARY KEY,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  plan TEXT NOT NULL,
+  billing_interval TEXT NOT NULL,
+  amount NUMERIC NOT NULL,
+  reference TEXT NOT NULL UNIQUE,                   -- Paystack reference; UNIQUE so a webhook + redirect can never charge-credit twice
+  method TEXT NOT NULL DEFAULT 'card',              -- card | manual
+  note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_subscription_payments_biz ON subscription_payments(business_id, created_at DESC);

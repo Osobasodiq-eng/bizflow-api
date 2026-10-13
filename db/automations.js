@@ -11,6 +11,7 @@
 // A check runs every 5 minutes; if the server was asleep, due emails go out when it wakes.
 
 const pool = require('./pool');
+const { hasFeature, assertEmailRoom } = require('./billing');
 const { sendMarketingEmail, emailConfigured, inboxAddress, inboundEnabled } = require('./email');
 const { ownerEmail } = require('./campaigns');
 const { buildEmail } = require('./campaigns');
@@ -134,7 +135,11 @@ async function tick() {
     );
     for (const a of flows) {
       try {
-        for (const t of await findTargets(a)) await sendOne(a, a.store_name, t);
+        if (!(await hasFeature(a.business_id, 'automations'))) continue; // plan lapsed: paused, not deleted
+        for (const t of await findTargets(a)) {
+          try { await assertEmailRoom(a.business_id, 1); } catch (e) { break; } // monthly allowance used up — resumes next month or on upgrade
+          await sendOne(a, a.store_name, t);
+        }
       } catch (err) {
         console.error(`Automation ${a.id} (${a.kind}) error:`, err.message);
       }

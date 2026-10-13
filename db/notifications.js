@@ -4,7 +4,7 @@
 
 const pool = require('./pool');
 
-const TYPES = new Set(['order', 'stock', 'message', 'campaign']);
+const TYPES = new Set(['order', 'stock', 'message', 'campaign', 'billing']);
 
 // dedupeKey: while the previous notification with the same key is still unread, it is updated
 // (new text, bumped to the top) instead of adding another row — so 12 chat messages from one

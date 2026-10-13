@@ -14,6 +14,7 @@ const pool = require('./pool');
 const { sendMarketingEmail, esc, inboxAddress, inboundEnabled } = require('./email');
 const { loadCustomerStats, membersOf, isReachable } = require('./segments');
 const { notify } = require('./notifications');
+const { assertEmailRoom } = require('./billing');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-this-in-production';
 const CONCURRENCY = 5;
@@ -88,6 +89,7 @@ async function startCampaign(campaignId, businessId) {
 
     const customers = await loadCustomerStats(businessId, client);
     const recipients = membersOf(campaign.segment, customers).filter(isReachable);
+    await assertEmailRoom(businessId, recipients.length); // plan: marketing on, monthly email allowance
     if (!recipients.length) throw { status: 400, message: 'No one in this segment has an email address (or they have all unsubscribed), so there is nobody to send to.' };
 
     await client.query(
@@ -183,6 +185,7 @@ async function tick() {
         // e.g. nobody left to send to — mark failed so it doesn't retry forever
         await pool.query(`UPDATE campaigns SET status = 'failed' WHERE id = $1 AND status IN ('scheduled','sending')`, [c.id]);
         console.error(`Scheduled campaign ${c.id} could not start:`, err.message || err);
+        notify(c.business_id, { type: 'campaign', link: 'marketing', title: 'A scheduled campaign could not be sent', body: String(err.message || 'Something went wrong').slice(0, 200) });
       }
     }
     await require('./automations').runAutomations();
