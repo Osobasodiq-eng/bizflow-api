@@ -258,7 +258,7 @@ router.get('/:businessId/products', async (req, res) => {
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
   const { rows } = await pool.query(
-    'SELECT id, name, category, price, quantity, image_url, description, specifications FROM products WHERE business_id = $1 ORDER BY id',
+    'SELECT id, name, category, price, quantity, image_url, images, description, specifications FROM products WHERE business_id = $1 ORDER BY id',
     [businessId]
   );
   const variantRows = await pool.query(
@@ -281,7 +281,8 @@ router.get('/:businessId/products', async (req, res) => {
       // size/variant actually has stock — the base quantity column is kept
       // in sync as a sum, but inStock should reflect real buyable state.
       inStock: variants.length ? variants.some(v => v.inStock) : p.quantity > 0,
-      imageUrl: p.image_url || null,
+      imageUrl: (Array.isArray(p.images) && p.images[0]) || p.image_url || null,
+      images: (Array.isArray(p.images) && p.images.length) ? p.images : (p.image_url ? [p.image_url] : []),
       description: p.description || null,
       specifications: p.specifications || [],
       variants,

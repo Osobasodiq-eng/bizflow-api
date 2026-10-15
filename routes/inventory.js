@@ -93,9 +93,22 @@ router.delete('/all', async (req, res) => {
   }
 });
 
+// Product photos: up to 8 http(s) URLs. The first one is the "main" photo and is mirrored into
+// image_url so everything that only knows about a single image keeps working.
+function cleanImages(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const u of raw) {
+    const url = String(u || '').trim();
+    if (/^https?:\/\//i.test(url) && url.length < 1000 && !out.includes(url)) out.push(url);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
 router.get('/', async (req, res) => {
   const { rows } = await pool.query(
-    'SELECT id, name, category, cost, price, quantity, threshold, image_url, description, specifications FROM products WHERE business_id = $1 ORDER BY id',
+    'SELECT id, name, category, cost, price, quantity, threshold, image_url, images, description, specifications FROM products WHERE business_id = $1 ORDER BY id',
     [req.businessId]
   );
   res.json(rows);
@@ -108,16 +121,19 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, cost, price, quantity, threshold, category, image_url, description, specifications } = req.body;
+  const { name, cost, price, quantity, threshold, category, description, specifications } = req.body;
+  let images = cleanImages(req.body.images);
+  if (!images.length && req.body.image_url) images = cleanImages([req.body.image_url]);
+  const image_url = images[0] || null;
   if (!name || cost == null || price == null) return res.status(400).json({ error: 'name, cost, and price are required' });
   if (!(await limitGuard(req, res, 'products'))) return; // plan limit
 
   const startQty = quantity ?? 0;
   const { rows } = await pool.query(
-    `INSERT INTO products (business_id, name, category, cost, price, quantity, threshold, image_url, description, specifications)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-    [req.businessId, name, category || 'Uncategorized', cost, price, startQty, threshold ?? 5, image_url || null,
-     description || null, JSON.stringify(specifications || [])]
+    `INSERT INTO products (business_id, name, category, cost, price, quantity, threshold, image_url, images, description, specifications)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+    [req.businessId, name, category || 'Uncategorized', cost, price, startQty, threshold ?? 5, image_url,
+     JSON.stringify(images), description || null, JSON.stringify(specifications || [])]
   );
   const product = rows[0];
 
@@ -131,7 +147,13 @@ router.post('/', async (req, res) => {
 });
 
 router.patch('/:id', async (req, res) => {
-  const fields = ['name', 'category', 'cost', 'price', 'quantity', 'threshold', 'image_url', 'description', 'specifications'];
+  const fields = ['name', 'category', 'cost', 'price', 'quantity', 'threshold', 'image_url', 'images', 'description', 'specifications'];
+  if (req.body.images !== undefined) {
+    req.body.images = cleanImages(req.body.images);
+    req.body.image_url = req.body.images[0] || null; // keep the single "main photo" column in sync
+  } else if (req.body.image_url !== undefined) {
+    req.body.images = cleanImages([req.body.image_url]);
+  }
   const updates = fields.filter(f => req.body[f] !== undefined);
   if (!updates.length) return res.status(400).json({ error: 'No valid fields to update' });
 
@@ -144,7 +166,7 @@ router.patch('/:id', async (req, res) => {
   const setClause = updates.map((f, i) => `${f} = $${i + 1}`).join(', ');
   // specifications is a JSONB column — it needs to arrive as a JSON string,
   // unlike every other plain text/number field here.
-  const values = updates.map(f => f === 'specifications' ? JSON.stringify(req.body[f]) : req.body[f]);
+  const values = updates.map(f => (f === 'specifications' || f === 'images') ? JSON.stringify(req.body[f]) : req.body[f]);
   const { rows } = await pool.query(
     `UPDATE products SET ${setClause} WHERE id = $${updates.length + 1} AND business_id = $${updates.length + 2} RETURNING *`,
     [...values, req.params.id, req.businessId]
@@ -208,10 +230,10 @@ router.post('/import', async (req, res) => {
       if (!r.name || r.cost == null || r.price == null) throw new Error('name, cost, and price are required');
       const qty = Number(r.quantity) || 0;
       const inserted = await pool.query(
-        `INSERT INTO products (business_id, name, category, cost, price, quantity, threshold, image_url, description, specifications)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        `INSERT INTO products (business_id, name, category, cost, price, quantity, threshold, image_url, images, description, specifications)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
         [req.businessId, r.name, r.category || 'Uncategorized', Number(r.cost), Number(r.price), qty, Number(r.threshold) || 5,
-         r.image_url || null, r.description || null, JSON.stringify(parsePackedSpecs(r.specifications))]
+         cleanImages([r.image_url])[0] || null, JSON.stringify(cleanImages([r.image_url])), r.description || null, JSON.stringify(parsePackedSpecs(r.specifications))]
       );
       if (qty > 0) {
         await logInventoryChange(null, {
