@@ -60,6 +60,16 @@ async function resolveDeliveryFee(client, businessId, deliveryZoneId) {
 // both the manual "place order, seller confirms payment later" flow AND the
 // real-payment flow (called only after Paystack confirms money moved), so
 // an order created either way ends up identical in the database.
+// Buyer-chosen options that aren't stock-tracked variants (e.g. Size 43, Colour Black on a product
+// whose merchant listed them as specifications). Only short plain strings are accepted.
+function cleanOptions(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 6).map(o => ({
+    label: String((o && o.label) || '').trim().slice(0, 30),
+    value: String((o && o.value) || '').trim().slice(0, 40),
+  })).filter(o => o.label && o.value);
+}
+
 async function createOrderFromItems(client, { businessId, customer, items, delivery, deliveryFee, paymentStatus, paystackReference, campaignId }) {
   // A returning buyer (same phone number, ignoring spaces/dashes) is the SAME customer —
   // otherwise every purchase would create a duplicate and "repeat customer", VIP and
@@ -133,10 +143,18 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
       });
     }
 
+    // Fold chosen options into the label so the dashboard, emails and receipts (which already
+    // show variantLabel) display them with no further changes.
+    const options = cleanOptions(item.options);
+    if (options.length) {
+      const optText = options.map(o => `${o.label}: ${o.value}`).join(', ');
+      variantLabel = variantLabel ? `${variantLabel} · ${optText}` : optText;
+    }
+
     itemsTotal += unitPrice * item.qty;
     orderItems.push({
       productId: product.id, name: product.name, qty: item.qty, price: unitPrice,
-      variantId: item.variantId || null, variantLabel,
+      variantId: item.variantId || null, variantLabel, options,
     });
   }
 
