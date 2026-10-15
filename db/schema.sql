@@ -151,6 +151,9 @@ CREATE INDEX IF NOT EXISTS idx_inventory_history_business ON inventory_history(b
 ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS specifications JSONB NOT NULL DEFAULT '[]'::jsonb;
+-- Several photos per product (first = main photo, mirrored in image_url)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT '[]'::jsonb;
+UPDATE products SET images = jsonb_build_array(image_url) WHERE image_url IS NOT NULL AND image_url <> '' AND images = '[]'::jsonb;
 
 -- Added later: storefront customization (logo, banner, description, theme)
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS logo_url TEXT;
