@@ -211,15 +211,27 @@ router.delete('/:id', async (req, res) => {
 // a typo in specs shouldn't block the whole product from importing.
 function parsePackedSpecs(raw) {
   if (!raw) return [];
-  return raw.split('|').map(pair => {
+  return String(raw).split('|').map(pair => {
     const [label, ...rest] = pair.split(':');
     return { label: (label || '').trim(), value: rest.join(':').trim() };
   }).filter(s => s.label && s.value);
 }
 
+// "12,000", "₦12000", " 5000 " → number. Returns NaN when it isn't a number at all.
+function parseMoney(v) {
+  if (typeof v === 'number') return v;
+  const t = String(v == null ? '' : v).replace(/[₦,\s]/g, '');
+  return t === '' ? NaN : Number(t);
+}
+// The bulk-upload "images" column: up to 8 links separated by | (line breaks and ; also work).
+function splitImageCell(v) {
+  return String(v || '').split(/[|\n;]+/).map(x => x.trim()).filter(Boolean);
+}
+
 router.post('/import', async (req, res) => {
   const rows = req.body.rows;
   if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'rows array is required' });
+  if (rows.length > 500) return res.status(400).json({ error: 'Please upload at most 500 products at a time.' });
   if (!(await limitGuard(req, res, 'products', rows.length))) return; // plan limit
 
   let created = 0;
@@ -227,23 +239,30 @@ router.post('/import', async (req, res) => {
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     try {
-      if (!r.name || r.cost == null || r.price == null) throw new Error('name, cost, and price are required');
-      const qty = Number(r.quantity) || 0;
+      const name = String(r.name || '').trim();
+      if (!name) throw new Error('name is required');
+      const price = parseMoney(r.price);
+      if (!Number.isFinite(price) || price < 0) throw new Error('price is required and must be a number');
+      const costRaw = parseMoney(r.cost);
+      const cost = Number.isFinite(costRaw) && costRaw >= 0 ? costRaw : 0; // cost is optional
+      const qty = Math.max(0, Math.round(parseMoney(r.quantity)) || 0);
+      const images = cleanImages(splitImageCell(r.images || r.image_url));
+      if ((r.images || r.image_url) && !images.length) throw new Error('image links must start with http:// or https://');
       const inserted = await pool.query(
         `INSERT INTO products (business_id, name, category, cost, price, quantity, threshold, image_url, images, description, specifications)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-        [req.businessId, r.name, r.category || 'Uncategorized', Number(r.cost), Number(r.price), qty, Number(r.threshold) || 5,
-         cleanImages([r.image_url])[0] || null, JSON.stringify(cleanImages([r.image_url])), r.description || null, JSON.stringify(parsePackedSpecs(r.specifications))]
+        [req.businessId, name, String(r.category || '').trim() || 'Uncategorized', cost, price, qty, Math.round(parseMoney(r.threshold)) || 5,
+         images[0] || null, JSON.stringify(images), String(r.description || '').trim() || null, JSON.stringify(parsePackedSpecs(r.specifications))]
       );
       if (qty > 0) {
         await logInventoryChange(null, {
-          businessId: req.businessId, productId: inserted.rows[0].id, productName: r.name,
+          businessId: req.businessId, productId: inserted.rows[0].id, productName: name,
           changeType: 'CSV import', quantityChange: qty, quantityBefore: 0, quantityAfter: qty,
         });
       }
       created++;
     } catch (err) {
-      errors.push({ row: i + 1, name: r.name || '(no name)', error: err.message });
+      errors.push({ row: i + 2, name: r.name || '(no name)', error: err.message });
     }
   }
   res.json({ created, errors });
