@@ -160,6 +160,7 @@ ALTER TABLE businesses ADD COLUMN IF NOT EXISTS logo_url TEXT;
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS banner_url TEXT;
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'forest';
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS display_style TEXT NOT NULL DEFAULT 'grid';
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC NOT NULL DEFAULT 0;
 
 -- Paystack subaccount details, once a merchant links their bank account
@@ -231,6 +232,9 @@ CREATE INDEX IF NOT EXISTS idx_campaign_recipients_campaign ON campaign_recipien
 
 -- Which campaign's link a buyer came through (set at checkout)
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL;
+-- Which social channel's tracked link (…&src=instagram) the buyer came through
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS source TEXT;
+CREATE INDEX IF NOT EXISTS idx_orders_source ON orders(business_id, source);
 CREATE INDEX IF NOT EXISTS idx_orders_campaign ON orders(campaign_id);
 
 -- Marketing automations: emails that send themselves when something happens
