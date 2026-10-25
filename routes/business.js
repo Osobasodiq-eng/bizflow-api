@@ -18,26 +18,41 @@ const VALID_THEMES = [
   'plum', 'amber', 'slate', 'terracotta', 'sage', 'noir',
 ];
 
+// How products are laid out on the storefront. The storefront knows how to draw each of these.
+const VALID_DISPLAYS = ['grid', 'shelf', 'hanger', 'spotlight', 'pinboard', 'lookbook', 'catalogue', 'stall', 'carousel'];
+
 router.get('/', async (req, res) => {
-  const { rows } = await pool.query(
-    'SELECT id, name, logo_url, banner_url, description, theme FROM businesses WHERE id = $1',
-    [req.businessId]
-  );
+  let rows;
+  try {
+    ({ rows } = await pool.query(
+      'SELECT id, name, logo_url, banner_url, description, theme, display_style FROM businesses WHERE id = $1',
+      [req.businessId]
+    ));
+  } catch (e) { // display_style column not applied yet
+    ({ rows } = await pool.query(
+      'SELECT id, name, logo_url, banner_url, description, theme FROM businesses WHERE id = $1',
+      [req.businessId]
+    ));
+  }
   if (!rows[0]) return res.status(404).json({ error: 'Business not found' });
   res.json(rows[0]);
 });
 
 router.patch('/', async (req, res) => {
-  const { logo_url, banner_url, description, theme } = req.body;
+  const { logo_url, banner_url, description, theme, display_style } = req.body;
 
   if (theme !== undefined && !VALID_THEMES.includes(theme)) {
     return res.status(400).json({ error: `theme must be one of: ${VALID_THEMES.join(', ')}` });
   }
 
+  if (display_style !== undefined && !VALID_DISPLAYS.includes(display_style)) {
+    return res.status(400).json({ error: `display_style must be one of: ${VALID_DISPLAYS.join(', ')}` });
+  }
+
   // Only update fields that were actually sent, same pattern as the
   // existing product PATCH route — a merchant can save just the logo
   // without accidentally wiping their description, for example.
-  const fields = { logo_url, banner_url, description, theme };
+  const fields = { logo_url, banner_url, description, theme, display_style };
   const setParts = [];
   const values = [];
   let i = 1;
@@ -52,7 +67,7 @@ router.patch('/', async (req, res) => {
 
   values.push(req.businessId);
   const { rows } = await pool.query(
-    `UPDATE businesses SET ${setParts.join(', ')} WHERE id = $${i} RETURNING id, name, logo_url, banner_url, description, theme`,
+    `UPDATE businesses SET ${setParts.join(', ')} WHERE id = $${i} RETURNING id, name, logo_url, banner_url, description, theme, display_style`,
     values
   );
   res.json(rows[0]);

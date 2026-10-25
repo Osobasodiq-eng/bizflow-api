@@ -70,7 +70,10 @@ function cleanOptions(raw) {
   })).filter(o => o.label && o.value);
 }
 
-async function createOrderFromItems(client, { businessId, customer, items, delivery, deliveryFee, paymentStatus, paystackReference, campaignId }) {
+const SOURCES = ['instagram', 'whatsapp', 'facebook', 'tiktok', 'other'];
+const cleanSource = v => { const s = String(v || '').trim().toLowerCase(); return SOURCES.includes(s) ? s : null; };
+
+async function createOrderFromItems(client, { businessId, customer, items, delivery, deliveryFee, paymentStatus, paystackReference, campaignId, source }) {
   // A returning buyer (same phone number, ignoring spaces/dashes) is the SAME customer —
   // otherwise every purchase would create a duplicate and "repeat customer", VIP and
   // marketing segments could never work. Their email/location are refreshed to the latest.
@@ -170,9 +173,9 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
   const amount = itemsTotal + deliveryFee;
 
   const orderResult = await client.query(
-    `INSERT INTO orders (business_id, customer_id, items, amount, payment_status, status, delivery, paystack_reference, campaign_id)
-     VALUES ($1, $2, $3, $4, $5, 'New', $6, $7, $8) RETURNING *`,
-    [businessId, resolvedCustomerId, JSON.stringify(orderItems), amount, paymentStatus, delivery || null, paystackReference || null, attributedCampaignId]
+    `INSERT INTO orders (business_id, customer_id, items, amount, payment_status, status, delivery, paystack_reference, campaign_id, source)
+     VALUES ($1, $2, $3, $4, $5, 'New', $6, $7, $8, $9) RETURNING *`,
+    [businessId, resolvedCustomerId, JSON.stringify(orderItems), amount, paymentStatus, delivery || null, paystackReference || null, attributedCampaignId, cleanSource(source)]
   );
   const newOrderId = orderResult.rows[0].id;
 
@@ -222,10 +225,19 @@ router.get('/:businessId/store', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
-  const { rows } = await pool.query(
-    'SELECT id, name, logo_url, banner_url, description, theme, paystack_subaccount_code FROM businesses WHERE id = $1',
-    [businessId]
-  );
+  // display_style arrives with schema.sql; if this deploy hasn't applied it yet, still serve the store
+  let rows;
+  try {
+    ({ rows } = await pool.query(
+      'SELECT id, name, logo_url, banner_url, description, theme, display_style, paystack_subaccount_code FROM businesses WHERE id = $1',
+      [businessId]
+    ));
+  } catch (e) {
+    ({ rows } = await pool.query(
+      'SELECT id, name, logo_url, banner_url, description, theme, paystack_subaccount_code FROM businesses WHERE id = $1',
+      [businessId]
+    ));
+  }
   if (!rows[0]) return res.status(404).json({ error: 'Store not found' });
   res.json({
     id: rows[0].id,
@@ -234,6 +246,7 @@ router.get('/:businessId/store', async (req, res) => {
     bannerUrl: rows[0].banner_url,
     description: rows[0].description,
     theme: rows[0].theme,
+    displayStyle: rows[0].display_style || 'grid',
     // Tells the storefront whether to show a real "Pay now" checkout or
     // fall back to the manual "place order, seller confirms payment" flow.
     paymentsEnabled: !!rows[0].paystack_subaccount_code,
@@ -299,7 +312,7 @@ router.post('/:businessId/orders', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
-  const { customer, items, delivery, deliveryZoneId, campaignId } = req.body;
+  const { customer, items, delivery, deliveryZoneId, campaignId, source } = req.body;
   if (!items || !items.length) return res.status(400).json({ error: 'items are required' });
   if (!customer || !customer.name || !customer.phone) {
     return res.status(400).json({ error: 'customer name and phone are required' });
@@ -313,7 +326,7 @@ router.post('/:businessId/orders', async (req, res) => {
 
     const deliveryFee = await resolveDeliveryFee(client, businessId, deliveryZoneId);
     const result = await createOrderFromItems(client, {
-      businessId, customer, items, delivery, deliveryFee, paymentStatus: 'Awaiting', campaignId,
+      businessId, customer, items, delivery, deliveryFee, paymentStatus: 'Awaiting', campaignId, source,
     });
 
     await client.query('COMMIT');
@@ -337,7 +350,7 @@ router.post('/:businessId/checkout/initialize', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
-  const { customer, items, delivery, deliveryZoneId, callbackUrl, campaignId } = req.body;
+  const { customer, items, delivery, deliveryZoneId, callbackUrl, campaignId, source } = req.body;
   if (!items || !items.length) return res.status(400).json({ error: 'items are required' });
   if (!customer || !customer.name || !customer.phone || !customer.email) {
     return res.status(400).json({ error: 'customer name, phone, and email are required' });
@@ -385,7 +398,7 @@ router.post('/:businessId/checkout/initialize', async (req, res) => {
         amount: Math.round(amount * 100), // Paystack expects kobo, not naira
         subaccount: business.paystack_subaccount_code,
         callback_url: callbackUrl || undefined,
-        metadata: { businessId, customer, items, delivery, deliveryZoneId, campaignId },
+        metadata: { businessId, customer, items, delivery, deliveryZoneId, campaignId, source },
       }),
     });
 
@@ -447,7 +460,7 @@ async function fulfillPaystackReference(reference, expectedBusinessId) {
     const deliveryFee = await resolveDeliveryFee(client, businessId, meta.deliveryZoneId);
     const result = await createOrderFromItems(client, {
       businessId, customer: meta.customer, items: meta.items, delivery: meta.delivery,
-      deliveryFee, paymentStatus: 'Paid', paystackReference: reference, campaignId: meta.campaignId,
+      deliveryFee, paymentStatus: 'Paid', paystackReference: reference, campaignId: meta.campaignId, source: meta.source,
     });
 
     // Defense in depth: confirm what we actually charged for matches what
