@@ -16,11 +16,23 @@ const pool = require('../db/pool');
 const TZ = 'Africa/Lagos';
 const RANGES = { 7: 7, 30: 30, 90: 90, 365: 365 };
 
+// One failing section (say, a column an older database doesn't have yet) must not blank the whole page:
+// log the real error for the server logs and return an empty result for that section only.
+const safely = (name, promise) => promise.catch(err => { console.error(`[analytics] ${name} failed:`, err.message); return { rows: [], failed: name }; });
+
 const pct = (cur, prev) => (prev > 0 ? Math.round(((cur - prev) / prev) * 1000) / 10 : null); // null = nothing to compare to
 
 router.get('/', async (req, res) => {
   const days = RANGES[Number(req.query.days)] || 30;
   const biz = req.businessId;
+
+  // orders.source arrived with the tracked-links update; tolerate a database that doesn't have it yet
+  let hasSource = true;
+  try {
+    const c = await pool.query(`SELECT 1 FROM information_schema.columns WHERE table_name = 'orders' AND column_name = 'source'`);
+    hasSource = c.rows.length > 0;
+  } catch (e) { hasSource = false; }
+  const SRC_COL = hasSource ? 'o.source' : 'NULL::text';
 
   // period = last N days including today; previous = the N days before that
   const periodSql = `
@@ -74,7 +86,7 @@ router.get('/', async (req, res) => {
     GROUP BY 1`, [biz, days]);
 
   const sourcesQ = pool.query(`${periodSql}
-    SELECT CASE WHEN o.campaign_id IS NOT NULL THEN 'email' WHEN o.source IS NOT NULL THEN o.source ELSE 'direct' END AS src,
+    SELECT CASE WHEN o.campaign_id IS NOT NULL THEN 'email' WHEN ${SRC_COL} IS NOT NULL THEN ${SRC_COL} ELSE 'direct' END AS src,
       COUNT(*)::int AS orders, COALESCE(SUM(o.amount), 0)::float AS revenue
     FROM bounds, orders o
     WHERE o.business_id = $1 AND o.status <> 'Cancelled' AND o.payment_status = 'Paid'
@@ -99,14 +111,18 @@ router.get('/', async (req, res) => {
   const owedQ = pool.query(`SELECT COALESCE(SUM(amount), 0)::float AS total, COUNT(*)::int AS n FROM orders
     WHERE business_id = $1 AND status <> 'Cancelled' AND payment_status <> 'Paid'`, [biz]);
 
-  const [totals, series, items, expenses, weekday, sources, buyers, newCust, owed] =
-    await Promise.all([totalsQ, seriesQ, itemsQ, expensesQ, weekdayQ, sourcesQ, buyersQ, newCustQ, owedQ]);
+  const [totals, series, items, expenses, weekday, sources, buyers, newCust, owed] = await Promise.all([
+    safely('totals', totalsQ), safely('series', seriesQ), safely('items', itemsQ), safely('expenses', expensesQ),
+    safely('weekday', weekdayQ), safely('sources', sourcesQ), safely('buyers', buyersQ), safely('newCustomers', newCustQ), safely('owed', owedQ),
+  ]);
+  const failed = [totals, series, items, expenses, weekday, sources, buyers, newCust, owed].map(r => r.failed).filter(Boolean);
+  if (failed.length === 9) return res.status(500).json({ error: 'Analytics could not be calculated right now. Please try again shortly.' });
 
   const t = { cur: { orders: 0, paid_orders: 0, revenue: 0 }, prev: { orders: 0, paid_orders: 0, revenue: 0 } };
   totals.rows.forEach(r => { t[r.span] = r; });
 
   const cogs = items.rows.reduce((s, r) => s + r.cost, 0);
-  const expenseTotal = expenses.rows[0].total;
+  const expenseTotal = expenses.rows[0]?.total || 0;
   const profit = t.cur.revenue - cogs - expenseTotal;
   const aov = t.cur.paid_orders ? t.cur.revenue / t.cur.paid_orders : 0;
   const aovPrev = t.prev.paid_orders ? t.prev.revenue / t.prev.paid_orders : 0;
@@ -120,14 +136,15 @@ router.get('/', async (req, res) => {
 
   res.json({
     days,
+    partial: failed.length ? failed : undefined,
     kpis: {
       revenue: { value: t.cur.revenue, change: pct(t.cur.revenue, t.prev.revenue) },
       orders: { value: t.cur.orders, change: pct(t.cur.orders, t.prev.orders) },
       avgOrder: { value: Math.round(aov), change: pct(aov, aovPrev) },
-      newCustomers: { value: newCust.rows[0].cur, change: pct(newCust.rows[0].cur, newCust.rows[0].prev) },
+      newCustomers: { value: newCust.rows[0]?.cur || 0, change: pct(newCust.rows[0]?.cur || 0, newCust.rows[0]?.prev || 0) },
       repeatRate: { value: repeatRate, buyers: buyers.rows.length, returning },
       profit: { value: Math.round(profit), cogs: Math.round(cogs), expenses: Math.round(expenseTotal) },
-      owed: { value: owed.rows[0].total, orders: owed.rows[0].n },
+      owed: { value: owed.rows[0]?.total || 0, orders: owed.rows[0]?.n || 0 },
     },
     series: series.rows.map(r => ({ day: r.day instanceof Date ? r.day.toISOString().slice(0, 10) : String(r.day).slice(0, 10), orders: r.orders, revenue: r.revenue })),
     topProducts: items.rows.slice(0, 8).map(r => ({ name: r.name, units: r.units, revenue: r.revenue, margin: r.revenue ? Math.round(((r.revenue - r.cost) / r.revenue) * 100) : null })),
