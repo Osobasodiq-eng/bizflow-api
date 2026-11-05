@@ -253,17 +253,14 @@ router.get('/:businessId/store', async (req, res) => {
 
   // display_style arrives with schema.sql; if this deploy hasn't applied it yet, still serve the store
   let rows;
-  try {
-    ({ rows } = await pool.query(
-      'SELECT id, name, logo_url, banner_url, description, theme, display_style, paystack_subaccount_code FROM businesses WHERE id = $1',
-      [businessId]
-    ));
-  } catch (e) {
-    ({ rows } = await pool.query(
-      'SELECT id, name, logo_url, banner_url, description, theme, paystack_subaccount_code FROM businesses WHERE id = $1',
-      [businessId]
-    ));
+  const base = 'id, name, logo_url, banner_url, description, theme';
+  for (const cols of [`${base}, display_style, design_style`, `${base}, display_style`, base]) {
+    try {
+      ({ rows } = await pool.query(`SELECT ${cols}, paystack_subaccount_code FROM businesses WHERE id = $1`, [businessId]));
+      break;
+    } catch (e) { /* column not applied yet, try fewer */ }
   }
+  if (!rows) return res.status(500).json({ error: 'Could not load store' });
   if (!rows[0]) return res.status(404).json({ error: 'Store not found' });
   res.json({
     id: rows[0].id,
@@ -273,6 +270,7 @@ router.get('/:businessId/store', async (req, res) => {
     description: rows[0].description,
     theme: rows[0].theme,
     displayStyle: rows[0].display_style || 'grid',
+    designStyle: rows[0].design_style || 'cinematic',
     // Tells the storefront whether to show a real "Pay now" checkout or
     // fall back to the manual "place order, seller confirms payment" flow.
     paymentsEnabled: !!rows[0].paystack_subaccount_code,

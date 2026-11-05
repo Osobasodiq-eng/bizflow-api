@@ -21,25 +21,25 @@ const VALID_THEMES = [
 // How products are laid out on the storefront. The storefront knows how to draw each of these.
 const VALID_DISPLAYS = ['grid', 'shelf', 'hanger', 'spotlight', 'pinboard', 'lookbook', 'catalogue', 'stall', 'carousel'];
 
+const VALID_DESIGNS = ['cinematic', 'minimal', 'editorial', 'bold', 'marketplace', 'social'];
+
 router.get('/', async (req, res) => {
+  // newer columns arrive with schema.sql; fall back gracefully if a deploy hasn't applied them yet
+  const base = 'id, name, logo_url, banner_url, description, theme';
   let rows;
-  try {
-    ({ rows } = await pool.query(
-      'SELECT id, name, logo_url, banner_url, description, theme, display_style FROM businesses WHERE id = $1',
-      [req.businessId]
-    ));
-  } catch (e) { // display_style column not applied yet
-    ({ rows } = await pool.query(
-      'SELECT id, name, logo_url, banner_url, description, theme FROM businesses WHERE id = $1',
-      [req.businessId]
-    ));
+  for (const cols of [`${base}, display_style, design_style`, `${base}, display_style`, base]) {
+    try {
+      ({ rows } = await pool.query(`SELECT ${cols} FROM businesses WHERE id = $1`, [req.businessId]));
+      break;
+    } catch (e) { /* try the next, smaller column set */ }
   }
+  if (!rows) return res.status(500).json({ error: 'Could not load business' });
   if (!rows[0]) return res.status(404).json({ error: 'Business not found' });
   res.json(rows[0]);
 });
 
 router.patch('/', async (req, res) => {
-  const { logo_url, banner_url, description, theme, display_style } = req.body;
+  const { logo_url, banner_url, description, theme, display_style, design_style } = req.body;
 
   if (theme !== undefined && !VALID_THEMES.includes(theme)) {
     return res.status(400).json({ error: `theme must be one of: ${VALID_THEMES.join(', ')}` });
@@ -49,10 +49,14 @@ router.patch('/', async (req, res) => {
     return res.status(400).json({ error: `display_style must be one of: ${VALID_DISPLAYS.join(', ')}` });
   }
 
+  if (design_style !== undefined && !VALID_DESIGNS.includes(design_style)) {
+    return res.status(400).json({ error: `design_style must be one of: ${VALID_DESIGNS.join(', ')}` });
+  }
+
   // Only update fields that were actually sent, same pattern as the
   // existing product PATCH route — a merchant can save just the logo
   // without accidentally wiping their description, for example.
-  const fields = { logo_url, banner_url, description, theme, display_style };
+  const fields = { logo_url, banner_url, description, theme, display_style, design_style };
   const setParts = [];
   const values = [];
   let i = 1;
@@ -67,7 +71,7 @@ router.patch('/', async (req, res) => {
 
   values.push(req.businessId);
   const { rows } = await pool.query(
-    `UPDATE businesses SET ${setParts.join(', ')} WHERE id = $${i} RETURNING id, name, logo_url, banner_url, description, theme, display_style`,
+    `UPDATE businesses SET ${setParts.join(', ')} WHERE id = $${i} RETURNING id, name, logo_url, banner_url, description, theme, display_style, design_style`,
     values
   );
   res.json(rows[0]);
