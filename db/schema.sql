@@ -367,3 +367,24 @@ CREATE TABLE IF NOT EXISTS subscription_payments (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_subscription_payments_biz ON subscription_payments(business_id, created_at DESC);
+
+
+-- Discount codes (Marketing → Discounts). Applied to the items total at checkout.
+CREATE TABLE IF NOT EXISTS discount_codes (
+  id SERIAL PRIMARY KEY,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'percent',      -- percent | fixed
+  value NUMERIC NOT NULL,
+  min_order NUMERIC NOT NULL DEFAULT 0,
+  max_uses INTEGER,                          -- NULL = unlimited
+  uses INTEGER NOT NULL DEFAULT 0,
+  starts_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_discount_codes_code ON discount_codes(business_id, code);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_code TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_amount NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS discount_code TEXT;

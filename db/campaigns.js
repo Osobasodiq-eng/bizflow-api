@@ -36,34 +36,41 @@ const apiBase = () => (process.env.API_URL || process.env.RENDER_EXTERNAL_URL ||
 const unsubUrl = customerId => (apiBase() ? `${apiBase()}/api/unsubscribe/${unsubToken(customerId)}` : null);
 
 // ---- content ----
-function personalise(text, customer, storeName) {
+function personalise(text, customer, storeName, code) {
   const first = (customer.name || '').trim().split(/\s+/)[0] || 'there';
   return String(text)
     .replace(/\{\{\s*first_name\s*\}\}/gi, first)
     .replace(/\{\{\s*name\s*\}\}/gi, customer.name || 'there')
-    .replace(/\{\{\s*store_name\s*\}\}/gi, storeName || '');
+    .replace(/\{\{\s*store_name\s*\}\}/gi, storeName || '')
+    .replace(/\{\{\s*(?:code|discount_code)\s*\}\}/gi, code || '');
 }
 
-function shopLink(businessId, campaignId) {
+function shopLink(businessId, campaignId, code) {
   const base = (process.env.STOREFRONT_URL || '').replace(/\/+$/, '');
   if (!base) return null;
-  return `${base}?business=${businessId}${campaignId ? `&c=${campaignId}` : ''}`;
+  return `${base}?business=${businessId}${campaignId ? `&c=${campaignId}` : ''}${code ? `&code=${encodeURIComponent(code)}` : ''}`;
 }
 
 function buildEmail({ campaign, customer, storeName, businessId, preview = false }) {
-  const subject = personalise(campaign.subject, customer, storeName);
-  const bodyText = personalise(campaign.body, customer, storeName);
-  const link = shopLink(businessId, preview ? null : campaign.id);
+  const code = campaign.discount_code || null; // optional discount code attached to this campaign
+  const subject = personalise(campaign.subject, customer, storeName, code);
+  const bodyText = personalise(campaign.body, customer, storeName, code);
+  const link = shopLink(businessId, preview ? null : campaign.id, code);
+  // If a code is attached but the merchant didn't write {{code}} into the message, show it in its own box.
+  const codeInBody = code && /\{\{\s*(?:code|discount_code)\s*\}\}/i.test(campaign.body);
+  const codeBox = code && !codeInBody
+    ? `<div style="margin:20px 0 0;padding:14px 18px;border:2px dashed #4F46E5;border-radius:10px;text-align:center;"><div style="font-size:12px;color:#6B7280;">Your discount code</div><div style="font-size:22px;font-weight:800;letter-spacing:.12em;color:#4F46E5;">${esc(code)}</div></div>` : '';
   const unsub = unsubUrl(customer.id);
   const html = `
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#111827;">
       <div style="font-size:13px;font-weight:600;color:#6B7280;margin-bottom:16px;">${esc(storeName || '')}</div>
       <div style="font-size:15px;line-height:1.6;color:#1F2937;">${esc(bodyText).replace(/\r?\n/g, '<br>')}</div>
+      ${codeBox}
       ${link ? `<p style="margin:24px 0 0;"><a href="${esc(link)}" style="display:inline-block;background:#4F46E5;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">Shop now</a></p>` : ''}
       <p style="color:#9CA3AF;font-size:11px;margin-top:32px;line-height:1.5;">You're receiving this because you've shopped with ${esc(storeName || 'us')}.
         ${unsub ? `<a href="${esc(unsub)}" style="color:#9CA3AF;">Unsubscribe</a>` : 'Reply to this email to stop receiving these messages.'}</p>
     </div>`;
-  const text = `${bodyText}\n\n${link ? `Shop: ${link}\n\n` : ''}${unsub ? `Unsubscribe: ${unsub}` : ''}`;
+  const text = `${bodyText}\n\n${code && !codeInBody ? `Discount code: ${code}\n\n` : ''}${link ? `Shop: ${link}\n\n` : ''}${unsub ? `Unsubscribe: ${unsub}` : ''}`;
   return { subject, html, text, unsubscribeUrl: unsub };
 }
 
