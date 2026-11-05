@@ -21,6 +21,7 @@ const { logInventoryChange } = require('../db/inventoryLog');
 const { sendOrderStatusEmail } = require('../db/email');
 const { notifyStorefrontOrder } = require('../db/notifications');
 const { checkDiscount, describe: describeDiscount } = require('../db/discounts');
+const { activeSales, saleFor, applyPercent } = require('../db/sales');
 
 function parseBusinessId(raw) {
   const id = Number(raw);
@@ -74,7 +75,7 @@ function cleanOptions(raw) {
 const SOURCES = ['instagram', 'whatsapp', 'facebook', 'tiktok', 'other'];
 const cleanSource = v => { const s = String(v || '').trim().toLowerCase(); return SOURCES.includes(s) ? s : null; };
 
-async function createOrderFromItems(client, { businessId, customer, items, delivery, deliveryFee, paymentStatus, paystackReference, campaignId, source, discountCode, forceDiscount }) {
+async function createOrderFromItems(client, { businessId, customer, items, delivery, deliveryFee, paymentStatus, paystackReference, campaignId, source, discountCode, forceDiscount, saleLock }) {
   // A returning buyer (same phone number, ignoring spaces/dashes) is the SAME customer —
   // otherwise every purchase would create a duplicate and "repeat customer", VIP and
   // marketing segments could never work. Their email/location are refreshed to the latest.
@@ -106,6 +107,9 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
     if (camp.rows[0]) attributedCampaignId = camp.rows[0].id;
   }
 
+  // Running sales set the price. After a Paystack payment, saleLock holds the percentages the buyer was actually charged.
+  const sales = saleLock ? [] : await activeSales(client, businessId);
+  const pctFor = product => saleLock ? Number(saleLock[product.id] || 0) : ((saleFor(sales, product) || {}).percent || 0);
   let itemsTotal = 0;
   const orderItems = [];
   const stockLogEntries = [];
@@ -118,7 +122,9 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
     const product = prodResult.rows[0];
     if (!product) throw { status: 400, message: `Unknown productId ${item.productId}` };
 
+    const salePct = pctFor(product);
     let unitPrice = Number(product.price);
+    let listPrice = unitPrice;
     let variantLabel = null;
 
     if (item.variantId) {
@@ -133,6 +139,7 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
       await client.query('UPDATE product_variants SET quantity = quantity - $1 WHERE id = $2', [item.qty, variant.id]);
       touchedProductIds.add(product.id);
       unitPrice = Number(variant.price);
+      listPrice = unitPrice;
       variantLabel = variant.label;
       stockLogEntries.push({
         productId: product.id, productName: `${product.name} (${variant.label})`,
@@ -155,9 +162,11 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
       variantLabel = variantLabel ? `${variantLabel} · ${optText}` : optText;
     }
 
+    unitPrice = applyPercent(unitPrice, salePct);
     itemsTotal += unitPrice * item.qty;
     orderItems.push({
       productId: product.id, name: product.name, qty: item.qty, price: unitPrice,
+      ...(salePct ? { listPrice, salePercent: salePct } : {}),
       variantId: item.variantId || null, variantLabel, options,
     });
   }
@@ -317,9 +326,12 @@ router.get('/:businessId/products', async (req, res) => {
     (variantsByProduct[v.product_id] ||= []).push({ id: v.id, label: v.label, price: Number(v.price), inStock: v.quantity > 0 });
   }
 
+  const sales = await activeSales(pool, businessId);
   res.json(rows.map(p => {
-    const variants = variantsByProduct[p.id] || [];
+    const sale = saleFor(sales, p);
+    const variants = (variantsByProduct[p.id] || []).map(v => sale ? { ...v, salePrice: applyPercent(v.price, sale.percent) } : v);
     return {
+      ...(sale ? { salePercent: sale.percent, salePrice: applyPercent(p.price, sale.percent), saleEndsAt: sale.endsAt, saleName: sale.name } : {}),
       id: p.id,
       name: p.name,
       category: p.category,
@@ -407,20 +419,24 @@ router.post('/:businessId/checkout/initialize', async (req, res) => {
     // to hold stock hostage for a payment that might never complete. Real
     // decrement happens at verify time, right before the order is created.
     let itemsTotal = 0;
+    const sales = await activeSales(client, businessId);
+    const saleLock = {}; // percentages charged now; replayed when the payment is turned into an order
     for (const item of items) {
-      const prodResult = await client.query('SELECT price, quantity, name FROM products WHERE id = $1 AND business_id = $2', [item.productId, businessId]);
+      const prodResult = await client.query('SELECT id, category, price, quantity, name FROM products WHERE id = $1 AND business_id = $2', [item.productId, businessId]);
       const product = prodResult.rows[0];
       if (!product) return res.status(400).json({ error: `Unknown productId ${item.productId}` });
+      const sp = (saleFor(sales, product) || {}).percent || 0;
+      if (sp) saleLock[product.id] = sp;
 
       if (item.variantId) {
         const variantResult = await client.query('SELECT price, quantity, label FROM product_variants WHERE id = $1 AND product_id = $2 AND business_id = $3', [item.variantId, item.productId, businessId]);
         const variant = variantResult.rows[0];
         if (!variant) return res.status(400).json({ error: `Selected size is not valid for ${product.name}` });
         if (variant.quantity < item.qty) return res.status(400).json({ error: `Not enough stock for ${product.name} (${variant.label})` });
-        itemsTotal += Number(variant.price) * item.qty;
+        itemsTotal += applyPercent(variant.price, sp) * item.qty;
       } else {
         if (product.quantity < item.qty) return res.status(400).json({ error: `Not enough stock for ${product.name}` });
-        itemsTotal += Number(product.price) * item.qty;
+        itemsTotal += applyPercent(product.price, sp) * item.qty;
       }
     }
     // The discount is worked out here, on the server, so the buyer is charged exactly what the order will total.
@@ -439,7 +455,7 @@ router.post('/:businessId/checkout/initialize', async (req, res) => {
         amount: Math.round(amount * 100), // Paystack expects kobo, not naira
         subaccount: business.paystack_subaccount_code,
         callback_url: callbackUrl || undefined,
-        metadata: { businessId, customer, items, delivery, deliveryZoneId, campaignId, source, discountCode: discountCode || null },
+        metadata: { businessId, customer, items, delivery, deliveryZoneId, campaignId, source, discountCode: discountCode || null, saleLock },
       }),
     });
 
@@ -502,7 +518,7 @@ async function fulfillPaystackReference(reference, expectedBusinessId) {
     const result = await createOrderFromItems(client, {
       businessId, customer: meta.customer, items: meta.items, delivery: meta.delivery,
       deliveryFee, paymentStatus: 'Paid', paystackReference: reference, campaignId: meta.campaignId, source: meta.source,
-      discountCode: meta.discountCode, forceDiscount: true, // already charged at the discounted price
+      discountCode: meta.discountCode, forceDiscount: true, saleLock: meta.saleLock || {}, // already charged at the discounted price
     });
 
     // Defense in depth: confirm what we actually charged for matches what

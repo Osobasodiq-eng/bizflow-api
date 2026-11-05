@@ -420,6 +420,89 @@ router.delete('/discounts/:id', async (req, res) => {
   res.status(204).send();
 });
 
+
+// ---------- store-wide sales ----------
+function saleState(r) {
+  const now = Date.now();
+  if (!r.active) return 'off';
+  if (r.ends_at && new Date(r.ends_at).getTime() <= now) return 'ended';
+  if (r.starts_at && new Date(r.starts_at).getTime() > now) return 'scheduled';
+  return 'live';
+}
+function shapeSale(r, products = []) {
+  const affected = products.filter(p => appliesToSale(r, p)).length;
+  return {
+    id: r.id, name: r.name, percent: Number(r.percent), scope: r.scope, categories: r.categories || [], productIds: (r.product_ids || []).map(Number),
+    startsAt: r.starts_at, endsAt: r.ends_at, active: r.active, state: saleState(r), affected, createdAt: r.created_at,
+  };
+}
+async function readSale(body, businessId, partial) {
+  const bad = message => { throw { status: 400, message }; };
+  const out = {};
+  if (!partial || body.name !== undefined) { const v = String(body.name || '').trim(); if (!v) bad('Give the sale a name, e.g. Black Friday'); if (v.length > 80) bad('Name is too long (80 characters max)'); out.name = v; }
+  if (!partial || body.percent !== undefined) { const v = Number(body.percent); if (!Number.isFinite(v) || v < 1 || v > 90) bad('Percent off must be between 1 and 90'); out.percent = v; }
+  if (!partial || body.scope !== undefined) { if (!['all', 'categories', 'products'].includes(body.scope)) bad('Choose what the sale applies to'); out.scope = body.scope; }
+  if (body.categories !== undefined) out.categories = JSON.stringify([...new Set((Array.isArray(body.categories) ? body.categories : []).map(c => String(c).trim()).filter(Boolean))].slice(0, 100));
+  if (body.productIds !== undefined) {
+    const ids = [...new Set((Array.isArray(body.productIds) ? body.productIds : []).map(Number).filter(Number.isInteger))].slice(0, 1000);
+    const { rows } = ids.length ? await pool.query('SELECT id FROM products WHERE business_id = $1 AND id = ANY($2::int[])', [businessId, ids]) : { rows: [] };
+    out.product_ids = JSON.stringify(rows.map(r => r.id)); // only this store's own products
+  }
+  for (const [k, col] of [['startsAt', 'starts_at'], ['endsAt', 'ends_at']]) {
+    if (body[k] !== undefined) { if (!body[k]) out[col] = null; else { const t = new Date(body[k]); if (isNaN(t.getTime())) bad('Pick a valid date'); out[col] = t; } }
+  }
+  if (body.active !== undefined) out.active = !!body.active;
+  if (!partial) {
+    if (out.scope === 'categories' && JSON.parse(out.categories || '[]').length === 0) bad('Pick at least one category');
+    if (out.scope === 'products' && JSON.parse(out.product_ids || '[]').length === 0) bad('Pick at least one product');
+  }
+  if (out.starts_at && out.ends_at && out.ends_at <= out.starts_at) bad('The end must be after the start');
+  return out;
+}
+const appliesToSale = (sale, product) => require('../db/sales').appliesTo(sale, product);
+
+router.get('/sales', async (req, res) => {
+  const [sales, products] = await Promise.all([
+    pool.query('SELECT * FROM sales WHERE business_id = $1 ORDER BY created_at DESC', [req.businessId]),
+    pool.query('SELECT id, category FROM products WHERE business_id = $1', [req.businessId]),
+  ]);
+  res.json(sales.rows.map(r => shapeSale(r, products.rows)));
+});
+
+router.post('/sales', async (req, res) => {
+  try {
+    const f = await readSale(req.body, req.businessId, false);
+    const cols = Object.keys(f);
+    const { rows: [r] } = await pool.query(
+      `INSERT INTO sales (business_id, ${cols.join(', ')}) VALUES ($1, ${cols.map((_, i) => '$' + (i + 2)).join(', ')}) RETURNING *`,
+      [req.businessId, ...cols.map(k => f[k])]
+    );
+    const { rows: products } = await pool.query('SELECT id, category FROM products WHERE business_id = $1', [req.businessId]);
+    res.status(201).json(shapeSale(r, products));
+  } catch (err) { fail(res, err); }
+});
+
+router.patch('/sales/:id', async (req, res) => {
+  try {
+    const f = await readSale(req.body, req.businessId, true);
+    const keys = Object.keys(f);
+    if (!keys.length) return res.status(400).json({ error: 'Nothing to update' });
+    const { rows: [r] } = await pool.query(
+      `UPDATE sales SET ${keys.map((k, i) => `${k} = $${i + 1}`).join(', ')} WHERE id = $${keys.length + 1} AND business_id = $${keys.length + 2} RETURNING *`,
+      [...keys.map(k => f[k]), req.params.id, req.businessId]
+    );
+    if (!r) return res.status(404).json({ error: 'Sale not found' });
+    const { rows: products } = await pool.query('SELECT id, category FROM products WHERE business_id = $1', [req.businessId]);
+    res.json(shapeSale(r, products));
+  } catch (err) { fail(res, err); }
+});
+
+router.delete('/sales/:id', async (req, res) => {
+  const { rowCount } = await pool.query('DELETE FROM sales WHERE id = $1 AND business_id = $2', [req.params.id, req.businessId]);
+  if (!rowCount) return res.status(404).json({ error: 'Sale not found' });
+  res.status(204).send();
+});
+
 // ---------- content calendar ----------
 const CONTENT_CHANNELS = ['instagram', 'whatsapp', 'facebook', 'tiktok', 'other'];
 const shapePost = r => ({ id: r.id, date: r.post_date, channel: r.channel, title: r.title, caption: r.caption || '', status: r.status });
