@@ -388,3 +388,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_discount_codes_code ON discount_codes(busi
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_code TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_amount NUMERIC NOT NULL DEFAULT 0;
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS discount_code TEXT;
+
+-- Store-wide sales (Marketing → Sales): automatic % off all products, some categories, or chosen products
+CREATE TABLE IF NOT EXISTS sales (
+  id SERIAL PRIMARY KEY,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  percent NUMERIC NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'all',          -- all | categories | products
+  categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+  product_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  starts_at TIMESTAMPTZ,
+  ends_at TIMESTAMPTZ,
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_sales_business ON sales(business_id, active);
+
