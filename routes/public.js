@@ -20,6 +20,7 @@ const pool = require('../db/pool');
 const { logInventoryChange } = require('../db/inventoryLog');
 const { sendOrderStatusEmail } = require('../db/email');
 const { notifyStorefrontOrder } = require('../db/notifications');
+const { checkDiscount, describe: describeDiscount } = require('../db/discounts');
 
 function parseBusinessId(raw) {
   const id = Number(raw);
@@ -73,7 +74,7 @@ function cleanOptions(raw) {
 const SOURCES = ['instagram', 'whatsapp', 'facebook', 'tiktok', 'other'];
 const cleanSource = v => { const s = String(v || '').trim().toLowerCase(); return SOURCES.includes(s) ? s : null; };
 
-async function createOrderFromItems(client, { businessId, customer, items, delivery, deliveryFee, paymentStatus, paystackReference, campaignId, source }) {
+async function createOrderFromItems(client, { businessId, customer, items, delivery, deliveryFee, paymentStatus, paystackReference, campaignId, source, discountCode, forceDiscount }) {
   // A returning buyer (same phone number, ignoring spaces/dashes) is the SAME customer —
   // otherwise every purchase would create a duplicate and "repeat customer", VIP and
   // marketing segments could never work. Their email/location are refreshed to the latest.
@@ -170,7 +171,19 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
     );
   }
 
-  const amount = itemsTotal + deliveryFee;
+  // Discount code: validated against THIS store and re-checked here under a row lock (never trust the browser's number).
+  let discount = 0, appliedCode = null;
+  if (discountCode) {
+    const r = await checkDiscount(client, businessId, discountCode, itemsTotal, { lock: true, force: !!forceDiscount });
+    if (r.ok) {
+      discount = r.discount; appliedCode = r.row.code;
+      await client.query('UPDATE discount_codes SET uses = uses + 1 WHERE id = $1', [r.row.id]);
+    } else if (!forceDiscount) {
+      throw { status: 400, message: r.message };
+    }
+  }
+
+  const amount = itemsTotal - discount + deliveryFee;
 
   const orderResult = await client.query(
     `INSERT INTO orders (business_id, customer_id, items, amount, payment_status, status, delivery, paystack_reference, campaign_id, source)
@@ -178,6 +191,9 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
     [businessId, resolvedCustomerId, JSON.stringify(orderItems), amount, paymentStatus, delivery || null, paystackReference || null, attributedCampaignId, cleanSource(source)]
   );
   const newOrderId = orderResult.rows[0].id;
+  if (appliedCode) {
+    await client.query('UPDATE orders SET discount_code = $1, discount_amount = $2 WHERE id = $3', [appliedCode, discount, newOrderId]);
+  }
 
   // Only real, confirmed payments get a row in `payments` — the manual
   // "Awaiting" flow legitimately has no money yet, so nothing to record
@@ -214,6 +230,7 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
   return {
     id: orderCode,
     itemsTotal, deliveryFee, amount,
+    discount, discountCode: appliedCode,
     items: orderItems,
     status: 'New',
     paymentStatus,
@@ -251,6 +268,23 @@ router.get('/:businessId/store', async (req, res) => {
     // fall back to the manual "place order, seller confirms payment" flow.
     paymentsEnabled: !!rows[0].paystack_subaccount_code,
   });
+});
+
+// POST /api/public/:businessId/discount/check  { code, subtotal }
+// Lets the cart show "SAVE10 — ₦1,500 off" before the buyer pays. Purely informational: the real check re-runs when the order is placed.
+router.post('/:businessId/discount/check', async (req, res) => {
+  const businessId = parseBusinessId(req.params.businessId);
+  if (!businessId) return res.status(404).json({ error: 'Store not found' });
+  const subtotal = Number(req.body.subtotal);
+  if (!Number.isFinite(subtotal) || subtotal <= 0) return res.status(400).json({ valid: false, message: 'Add something to your bag first' });
+  try {
+    const r = await checkDiscount(pool, businessId, req.body.code, subtotal);
+    if (!r.ok) return res.json({ valid: false, message: r.message });
+    res.json({ valid: true, code: r.row.code, discount: r.discount, label: describeDiscount(r.row) });
+  } catch (err) {
+    console.error('Discount check error:', err.message); // e.g. discount_codes table not created yet
+    res.json({ valid: false, message: 'That code isn\'t valid' });
+  }
 });
 
 // GET /api/public/:businessId/delivery-zones
@@ -312,7 +346,7 @@ router.post('/:businessId/orders', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
-  const { customer, items, delivery, deliveryZoneId, campaignId, source } = req.body;
+  const { customer, items, delivery, deliveryZoneId, campaignId, source, discountCode } = req.body;
   if (!items || !items.length) return res.status(400).json({ error: 'items are required' });
   if (!customer || !customer.name || !customer.phone) {
     return res.status(400).json({ error: 'customer name and phone are required' });
@@ -326,7 +360,7 @@ router.post('/:businessId/orders', async (req, res) => {
 
     const deliveryFee = await resolveDeliveryFee(client, businessId, deliveryZoneId);
     const result = await createOrderFromItems(client, {
-      businessId, customer, items, delivery, deliveryFee, paymentStatus: 'Awaiting', campaignId, source,
+      businessId, customer, items, delivery, deliveryFee, paymentStatus: 'Awaiting', campaignId, source, discountCode,
     });
 
     await client.query('COMMIT');
@@ -350,7 +384,7 @@ router.post('/:businessId/checkout/initialize', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
 
-  const { customer, items, delivery, deliveryZoneId, callbackUrl, campaignId, source } = req.body;
+  const { customer, items, delivery, deliveryZoneId, callbackUrl, campaignId, source, discountCode } = req.body;
   if (!items || !items.length) return res.status(400).json({ error: 'items are required' });
   if (!customer || !customer.name || !customer.phone || !customer.email) {
     return res.status(400).json({ error: 'customer name, phone, and email are required' });
@@ -389,7 +423,14 @@ router.post('/:businessId/checkout/initialize', async (req, res) => {
         itemsTotal += Number(product.price) * item.qty;
       }
     }
-    const amount = itemsTotal + deliveryFee;
+    // The discount is worked out here, on the server, so the buyer is charged exactly what the order will total.
+    let discount = 0;
+    if (discountCode) {
+      const r = await checkDiscount(client, businessId, discountCode, itemsTotal);
+      if (!r.ok) return res.status(400).json({ error: r.message });
+      discount = r.discount;
+    }
+    const amount = itemsTotal - discount + deliveryFee;
 
     const paystackRes = await paystackFetch('/transaction/initialize', {
       method: 'POST',
@@ -398,7 +439,7 @@ router.post('/:businessId/checkout/initialize', async (req, res) => {
         amount: Math.round(amount * 100), // Paystack expects kobo, not naira
         subaccount: business.paystack_subaccount_code,
         callback_url: callbackUrl || undefined,
-        metadata: { businessId, customer, items, delivery, deliveryZoneId, campaignId, source },
+        metadata: { businessId, customer, items, delivery, deliveryZoneId, campaignId, source, discountCode: discountCode || null },
       }),
     });
 
@@ -461,6 +502,7 @@ async function fulfillPaystackReference(reference, expectedBusinessId) {
     const result = await createOrderFromItems(client, {
       businessId, customer: meta.customer, items: meta.items, delivery: meta.delivery,
       deliveryFee, paymentStatus: 'Paid', paystackReference: reference, campaignId: meta.campaignId, source: meta.source,
+      discountCode: meta.discountCode, forceDiscount: true, // already charged at the discounted price
     });
 
     // Defense in depth: confirm what we actually charged for matches what

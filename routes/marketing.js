@@ -11,6 +11,7 @@ const { startCampaign, sendInBackground, buildEmail } = require('../db/campaigns
 const { sendMarketingEmail, emailConfigured } = require('../db/email');
 const { KINDS, ensureAutomations } = require('../db/automations');
 const { requireFeature } = require('../db/billing');
+const { clean: cleanCode, describe: describeDiscount } = require('../db/discounts');
 
 // Plan gates: Marketing is on Growth+, Automations on Pro, the content calendar on Growth+. Free plans get a 402 the dashboard turns into an upgrade card.
 router.use((req, res, next) => {
@@ -28,6 +29,7 @@ function shapeCampaign(c, stats = {}) {
     subject: c.subject, body: c.body, status: c.status,
     scheduledAt: c.scheduled_at, sentAt: c.sent_at, createdAt: c.created_at,
     recipientCount: c.recipient_count, sentCount: c.sent_count, failedCount: c.failed_count,
+    discountCode: c.discount_code || null,
     isAutomation: c.status === 'automation',
     orders: Number(stats.orders || 0), revenue: Number(stats.revenue || 0),
   };
@@ -41,7 +43,14 @@ function readCampaignFields(body, { partial = false } = {}) {
   if (!partial || body.segment !== undefined) { out.segment = String(body.segment || ''); if (!SEGMENT_KEYS.includes(out.segment)) bad('Pick who this should go to'); }
   if (!partial || body.subject !== undefined) { out.subject = String(body.subject || '').trim(); if (!out.subject) bad('Add a subject line'); if (out.subject.length > 150) bad('Subject is too long (150 characters max)'); }
   if (!partial || body.body !== undefined) { out.body = String(body.body || '').trim(); if (!out.body) bad('Write the message'); if (out.body.length > 5000) bad('Message is too long (5,000 characters max)'); }
+  if (body.discountCode !== undefined) out.discount_code = cleanCode(body.discountCode) || null;
   return out;
+}
+// A campaign can only carry a code that exists for this store.
+async function assertCodeExists(businessId, code) {
+  if (!code) return;
+  const { rows } = await pool.query('SELECT 1 FROM discount_codes WHERE business_id = $1 AND code = $2', [businessId, code]);
+  if (!rows.length) throw { status: 400, message: `Discount code ${code} doesn't exist — create it under Discounts first` };
 }
 function readScheduleTime(value) {
   const t = new Date(value);
@@ -132,9 +141,11 @@ router.get('/campaigns/:id', async (req, res) => {
 router.post('/campaigns', async (req, res) => {
   try {
     const f = readCampaignFields(req.body);
+    await assertCodeExists(req.businessId, f.discount_code);
+    const cols = ['business_id', 'name', 'segment', 'subject', 'body'], vals = [req.businessId, f.name, f.segment, f.subject, f.body];
+    if (f.discount_code) { cols.push('discount_code'); vals.push(f.discount_code); } // only touched when used, so older databases keep working
     const { rows: [c] } = await pool.query(
-      `INSERT INTO campaigns (business_id, name, segment, subject, body) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [req.businessId, f.name, f.segment, f.subject, f.body]
+      `INSERT INTO campaigns (${cols.join(', ')}) VALUES (${cols.map((_, i) => '$' + (i + 1)).join(', ')}) RETURNING *`, vals
     );
     res.status(201).json(shapeCampaign(c));
   } catch (err) { fail(res, err); }
@@ -143,6 +154,7 @@ router.post('/campaigns', async (req, res) => {
 router.patch('/campaigns/:id', async (req, res) => {
   try {
     const f = readCampaignFields(req.body, { partial: true });
+    await assertCodeExists(req.businessId, f.discount_code);
     const keys = Object.keys(f);
     if (!keys.length) return res.status(400).json({ error: 'Nothing to update' });
     const set = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
@@ -205,7 +217,7 @@ router.post('/test', async (req, res) => {
     const f = readCampaignFields({ name: 'test', segment: 'all', subject: req.body.subject, body: req.body.body });
     const { rows: [biz] } = await pool.query('SELECT name FROM businesses WHERE id = $1', [req.businessId]);
     const mail = buildEmail({
-      campaign: { subject: `[Test] ${f.subject}`, body: f.body }, customer: { id: 0, name: 'Ada Customer' },
+      campaign: { subject: `[Test] ${f.subject}`, body: f.body, discount_code: cleanCode(req.body.discountCode) || null }, customer: { id: 0, name: 'Ada Customer' },
       storeName: biz && biz.name, businessId: req.businessId, preview: true,
     });
     const result = await sendMarketingEmail({ to: req.userEmail, fromName: biz && biz.name, ...mail, unsubscribeUrl: null });
@@ -296,16 +308,117 @@ router.get('/analytics', async (req, res) => {
   const byId = Object.fromEntries(stats.rows.map(r => [r.campaign_id, r]));
   const list = campaigns.rows.map(c => shapeCampaign(c, byId[c.id]));
   const totalRevenue = list.reduce((s, c) => s + c.revenue, 0);
+  // Social channels: paid orders that arrived through a tracked link (…&src=instagram).
+  // An order that came from a campaign email counts for Email only.
+  const { rows: social } = await pool.query(
+    `SELECT source, COUNT(*)::int AS orders, COALESCE(SUM(amount), 0)::float AS revenue
+     FROM orders WHERE business_id = $1 AND source IS NOT NULL AND campaign_id IS NULL AND payment_status = 'Paid'
+     GROUP BY source`, [req.businessId]);
+  const bySource = Object.fromEntries(social.map(r => [r.source, r]));
+  const chan = (label, key) => ({ channel: label, revenue: bySource[key]?.revenue || 0, orders: bySource[key]?.orders || 0, available: true });
   res.json({
     campaigns: list,
     channels: [
       { channel: 'Email', revenue: totalRevenue, orders: list.reduce((s, c) => s + c.orders, 0), available: true },
-      { channel: 'WhatsApp', revenue: 0, orders: 0, available: false },
-      { channel: 'Instagram', revenue: 0, orders: 0, available: false },
+      chan('WhatsApp', 'whatsapp'), chan('Instagram', 'instagram'), chan('Facebook', 'facebook'), chan('TikTok', 'tiktok'),
     ],
   });
 });
 
+
+
+// ---------- discount codes ----------
+function discountState(r) {
+  const now = Date.now();
+  if (!r.active) return 'off';
+  if (r.expires_at && new Date(r.expires_at).getTime() < now) return 'expired';
+  if (r.max_uses != null && r.uses >= r.max_uses) return 'used_up';
+  if (r.starts_at && new Date(r.starts_at).getTime() > now) return 'scheduled';
+  return 'active';
+}
+const shapeDiscount = (r, st = {}) => ({
+  id: r.id, code: r.code, type: r.type, value: Number(r.value), label: describeDiscount(r),
+  minOrder: Number(r.min_order), maxUses: r.max_uses, uses: r.uses,
+  startsAt: r.starts_at, expiresAt: r.expires_at, active: r.active, state: discountState(r), createdAt: r.created_at,
+  orders: Number(st.orders || 0), revenue: Number(st.revenue || 0), given: Number(st.given || 0),
+});
+function readDiscount(body, partial) {
+  const bad = message => { throw { status: 400, message }; };
+  const out = {};
+  if (!partial || body.code !== undefined) {
+    let c = cleanCode(body.code);
+    if (!c && !partial) c = 'SAVE' + Math.random().toString(36).slice(2, 6).toUpperCase();
+    if (!c || c.length < 3) bad('A code needs at least 3 letters or numbers');
+    out.code = c;
+  }
+  if (!partial || body.type !== undefined) { if (!['percent', 'fixed'].includes(body.type)) bad('Pick percent off or a fixed amount'); out.type = body.type; }
+  if (!partial || body.value !== undefined) {
+    const v = Number(body.value);
+    if (!Number.isFinite(v) || v <= 0) bad('Enter how much the discount takes off');
+    if (body.type === 'percent' && v > 100) bad('A percentage can\'t be more than 100');
+    out.value = v;
+  }
+  if (body.minOrder !== undefined) { const v = Number(body.minOrder || 0); if (!Number.isFinite(v) || v < 0) bad('Minimum order must be 0 or more'); out.min_order = v; }
+  if (body.maxUses !== undefined) { if (body.maxUses === null || body.maxUses === '') out.max_uses = null; else { const v = Number(body.maxUses); if (!Number.isInteger(v) || v < 1) bad('Usage limit must be a whole number, 1 or more'); out.max_uses = v; } }
+  for (const [k, col] of [['startsAt', 'starts_at'], ['expiresAt', 'expires_at']]) {
+    if (body[k] !== undefined) { if (!body[k]) out[col] = null; else { const t = new Date(body[k]); if (isNaN(t.getTime())) bad('Pick a valid date'); out[col] = t; } }
+  }
+  if (body.active !== undefined) out.active = !!body.active;
+  if (out.starts_at && out.expires_at && out.expires_at <= out.starts_at) bad('The end date must be after the start date');
+  return out;
+}
+
+router.get('/discounts', async (req, res) => {
+  const [codes, stats] = await Promise.all([
+    pool.query('SELECT * FROM discount_codes WHERE business_id = $1 ORDER BY created_at DESC', [req.businessId]),
+    pool.query(
+      `SELECT discount_code AS code, COUNT(*) AS orders,
+              COALESCE(SUM(amount) FILTER (WHERE payment_status = 'Paid'), 0) AS revenue,
+              COALESCE(SUM(discount_amount), 0) AS given
+       FROM orders WHERE business_id = $1 AND discount_code IS NOT NULL AND status != 'Cancelled' GROUP BY discount_code`, [req.businessId]),
+  ]);
+  const by = Object.fromEntries(stats.rows.map(r => [r.code, r]));
+  res.json(codes.rows.map(r => shapeDiscount(r, by[r.code])));
+});
+
+router.post('/discounts', async (req, res) => {
+  try {
+    const f = readDiscount(req.body, false);
+    const cols = Object.keys(f);
+    const { rows: [r] } = await pool.query(
+      `INSERT INTO discount_codes (business_id, ${cols.join(', ')}) VALUES ($1, ${cols.map((_, i) => '$' + (i + 2)).join(', ')}) RETURNING *`,
+      [req.businessId, ...cols.map(k => f[k])]
+    );
+    res.status(201).json(shapeDiscount(r));
+  } catch (err) {
+    if (err && err.code === '23505') return res.status(400).json({ error: 'You already have a code with that name' });
+    fail(res, err);
+  }
+});
+
+router.patch('/discounts/:id', async (req, res) => {
+  try {
+    const f = readDiscount(req.body, true);
+    const keys = Object.keys(f);
+    if (!keys.length) return res.status(400).json({ error: 'Nothing to update' });
+    const { rows: [r] } = await pool.query(
+      `UPDATE discount_codes SET ${keys.map((k, i) => `${k} = $${i + 1}`).join(', ')} WHERE id = $${keys.length + 1} AND business_id = $${keys.length + 2} RETURNING *`,
+      [...keys.map(k => f[k]), req.params.id, req.businessId]
+    );
+    if (!r) return res.status(404).json({ error: 'Code not found' });
+    res.json(shapeDiscount(r));
+  } catch (err) {
+    if (err && err.code === '23505') return res.status(400).json({ error: 'You already have a code with that name' });
+    fail(res, err);
+  }
+});
+
+router.delete('/discounts/:id', async (req, res) => {
+  // Past orders keep their code text (it's stored on the order), so deleting is safe.
+  const { rowCount } = await pool.query('DELETE FROM discount_codes WHERE id = $1 AND business_id = $2', [req.params.id, req.businessId]);
+  if (!rowCount) return res.status(404).json({ error: 'Code not found' });
+  res.status(204).send();
+});
 
 // ---------- content calendar ----------
 const CONTENT_CHANNELS = ['instagram', 'whatsapp', 'facebook', 'tiktok', 'other'];
