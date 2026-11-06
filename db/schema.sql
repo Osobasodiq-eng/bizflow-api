@@ -407,3 +407,11 @@ CREATE TABLE IF NOT EXISTS sales (
 );
 CREATE INDEX IF NOT EXISTS idx_sales_business ON sales(business_id, active);
 
+
+-- Store addresses: yourname.<platform domain> (Growth+) and the merchant's own domain (Pro)
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS subdomain TEXT;
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS custom_domain TEXT;
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS custom_domain_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS custom_domain_render_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_subdomain ON businesses (lower(subdomain)) WHERE subdomain IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_custom_domain ON businesses (lower(custom_domain)) WHERE custom_domain IS NOT NULL;

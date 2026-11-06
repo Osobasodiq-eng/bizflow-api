@@ -110,7 +110,7 @@ async function sendOne(a, storeName, t) {
   try {
     const mail = buildEmail({
       campaign: { id: a.bucket_campaign_id, subject: a.subject, body: a.body },
-      customer: { id: t.customer_id, name: t.name }, storeName, businessId: a.business_id,
+      customer: { id: t.customer_id, name: t.name }, storeName, businessId: a.business_id, store: await require('./domains').storeBaseFor(a.business_id),
     });
     result = await sendMarketingEmail({ to: t.email.trim(), fromName: storeName, tag: `automation-${a.id}`, replyTo: inboundEnabled() ? inboxAddress(a.business_id) : await ownerEmail(a.business_id), ...mail });
   } catch (err) {

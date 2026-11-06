@@ -11,6 +11,7 @@
 
 const crypto = require('crypto');
 const pool = require('./pool');
+const { storeBaseFor } = require('./domains');
 const { sendMarketingEmail, esc, inboxAddress, inboundEnabled } = require('./email');
 const { loadCustomerStats, membersOf, isReachable } = require('./segments');
 const { notify } = require('./notifications');
@@ -45,17 +46,21 @@ function personalise(text, customer, storeName, code) {
     .replace(/\{\{\s*(?:code|discount_code)\s*\}\}/gi, code || '');
 }
 
-function shopLink(businessId, campaignId, code) {
+function shopLink(businessId, campaignId, code, store) {
+  if (store && store.base) { // the merchant's own address (subdomain / custom domain), or the plain link plus ?business=
+    const q = [store.param, campaignId ? `c=${campaignId}` : '', code ? `code=${encodeURIComponent(code)}` : ''].filter(Boolean).join('&');
+    return `${store.base}/${q ? '?' + q : ''}`;
+  }
   const base = (process.env.STOREFRONT_URL || '').replace(/\/+$/, '');
   if (!base) return null;
   return `${base}?business=${businessId}${campaignId ? `&c=${campaignId}` : ''}${code ? `&code=${encodeURIComponent(code)}` : ''}`;
 }
 
-function buildEmail({ campaign, customer, storeName, businessId, preview = false }) {
+function buildEmail({ campaign, customer, storeName, businessId, preview = false, store = null }) {
   const code = campaign.discount_code || null; // optional discount code attached to this campaign
   const subject = personalise(campaign.subject, customer, storeName, code);
   const bodyText = personalise(campaign.body, customer, storeName, code);
-  const link = shopLink(businessId, preview ? null : campaign.id, code);
+  const link = shopLink(businessId, preview ? null : campaign.id, code, store);
   // If a code is attached but the merchant didn't write {{code}} into the message, show it in its own box.
   const codeInBody = code && /\{\{\s*(?:code|discount_code)\s*\}\}/i.test(campaign.body);
   const codeBox = code && !codeInBody
@@ -141,7 +146,7 @@ async function processCampaign(campaignId) {
           return;
         }
         const customer = { id: r.customer_id, name: r.name };
-        const mail = buildEmail({ campaign, customer, storeName: biz && biz.name, businessId: campaign.business_id });
+        const mail = buildEmail({ campaign, customer, storeName: biz && biz.name, businessId: campaign.business_id, store: await storeBaseFor(campaign.business_id) });
         const result = await sendMarketingEmail({ to: r.email, fromName: biz && biz.name, tag: `campaign-${campaignId}`, replyTo, ...mail });
         if (result.sent) {
           await pool.query(`UPDATE campaign_recipients SET status = 'sent', sent_at = now() WHERE id = $1`, [r.id]);
