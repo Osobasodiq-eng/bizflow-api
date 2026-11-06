@@ -162,6 +162,7 @@ ALTER TABLE businesses ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'forest';
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS display_style TEXT NOT NULL DEFAULT 'grid';
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS design_style TEXT NOT NULL DEFAULT 'cinematic';
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS look_style TEXT NOT NULL DEFAULT 'none';
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC NOT NULL DEFAULT 0;
 
 -- Paystack subaccount details, once a merchant links their bank account
