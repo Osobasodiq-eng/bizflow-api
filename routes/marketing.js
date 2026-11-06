@@ -218,7 +218,7 @@ router.post('/test', async (req, res) => {
     const { rows: [biz] } = await pool.query('SELECT name FROM businesses WHERE id = $1', [req.businessId]);
     const mail = buildEmail({
       campaign: { subject: `[Test] ${f.subject}`, body: f.body, discount_code: cleanCode(req.body.discountCode) || null }, customer: { id: 0, name: 'Ada Customer' },
-      storeName: biz && biz.name, businessId: req.businessId, preview: true,
+      storeName: biz && biz.name, businessId: req.businessId, preview: true, store: await require('../db/domains').storeBaseFor(req.businessId),
     });
     const result = await sendMarketingEmail({ to: req.userEmail, fromName: biz && biz.name, ...mail, unsubscribeUrl: null });
     if (!result.sent) return res.status(502).json({ error: `Couldn't send the test email${result.detail ? ' — ' + result.detail : ''}` });

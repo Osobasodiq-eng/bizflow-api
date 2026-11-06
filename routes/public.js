@@ -247,6 +247,14 @@ async function createOrderFromItems(client, { businessId, customer, items, deliv
 }
 
 // GET /api/public/:businessId/store
+// Which store lives at this hostname? Lets kicksmith.<platform domain> and merchants' own domains open the right store.
+router.get('/resolve', async (req, res) => {
+  const id = await require('../db/domains').resolveHost(req.query.host);
+  res.set('Cache-Control', 'public, max-age=60');
+  if (!id) return res.status(404).json({ error: 'No store at this address' });
+  res.json({ businessId: id });
+});
+
 router.get('/:businessId/store', async (req, res) => {
   const businessId = parseBusinessId(req.params.businessId);
   if (!businessId) return res.status(404).json({ error: 'Store not found' });
