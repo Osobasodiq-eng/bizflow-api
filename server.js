@@ -143,6 +143,7 @@ app.use('/api/billing', requireAuth, safe(require('./routes/billing')));
 app.use('/api/customers', requireAuth, safe(require('./routes/customers')));
 app.use('/api/products', requireAuth, safe(require('./routes/inventory')));
 app.use('/api/imagekit', requireAuth, safe(require('./routes/imagekit')));
+app.use('/api/domains', requireAuth, safe(require('./routes/domains')));
 app.use('/api/business', requireAuth, safe(require('./routes/business')));
 app.use('/api/delivery-zones', requireAuth, safe(require('./routes/delivery-zones')));
 app.use('/api/paystack', requireAuth, safe(require('./routes/paystack')));
