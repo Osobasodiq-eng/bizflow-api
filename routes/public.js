@@ -254,7 +254,7 @@ router.get('/:businessId/store', async (req, res) => {
   // display_style arrives with schema.sql; if this deploy hasn't applied it yet, still serve the store
   let rows;
   const base = 'id, name, logo_url, banner_url, description, theme';
-  for (const cols of [`${base}, display_style, design_style`, `${base}, display_style`, base]) {
+  for (const cols of [`${base}, display_style, design_style, look_style`, `${base}, display_style, design_style`, `${base}, display_style`, base]) {
     try {
       ({ rows } = await pool.query(`SELECT ${cols}, paystack_subaccount_code FROM businesses WHERE id = $1`, [businessId]));
       break;
@@ -271,6 +271,7 @@ router.get('/:businessId/store', async (req, res) => {
     theme: rows[0].theme,
     displayStyle: rows[0].display_style || 'grid',
     designStyle: rows[0].design_style || 'cinematic',
+    lookStyle: rows[0].look_style || 'none',
     // Tells the storefront whether to show a real "Pay now" checkout or
     // fall back to the manual "place order, seller confirms payment" flow.
     paymentsEnabled: !!rows[0].paystack_subaccount_code,

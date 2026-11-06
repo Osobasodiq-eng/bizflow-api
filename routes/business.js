@@ -21,13 +21,14 @@ const VALID_THEMES = [
 // How products are laid out on the storefront. The storefront knows how to draw each of these.
 const VALID_DISPLAYS = ['grid', 'shelf', 'hanger', 'spotlight', 'pinboard', 'lookbook', 'catalogue', 'stall', 'carousel'];
 
+const VALID_LOOKS = ['none', 'glass', 'neon', 'luxe', 'pastel', 'vintage', 'mono'];
 const VALID_DESIGNS = ['cinematic', 'minimal', 'editorial', 'bold', 'marketplace', 'social'];
 
 router.get('/', async (req, res) => {
   // newer columns arrive with schema.sql; fall back gracefully if a deploy hasn't applied them yet
   const base = 'id, name, logo_url, banner_url, description, theme';
   let rows;
-  for (const cols of [`${base}, display_style, design_style`, `${base}, display_style`, base]) {
+  for (const cols of [`${base}, display_style, design_style, look_style`, `${base}, display_style, design_style`, `${base}, display_style`, base]) {
     try {
       ({ rows } = await pool.query(`SELECT ${cols} FROM businesses WHERE id = $1`, [req.businessId]));
       break;
@@ -39,7 +40,7 @@ router.get('/', async (req, res) => {
 });
 
 router.patch('/', async (req, res) => {
-  const { logo_url, banner_url, description, theme, display_style, design_style } = req.body;
+  const { logo_url, banner_url, description, theme, display_style, design_style, look_style } = req.body;
 
   if (theme !== undefined && !VALID_THEMES.includes(theme)) {
     return res.status(400).json({ error: `theme must be one of: ${VALID_THEMES.join(', ')}` });
@@ -53,10 +54,14 @@ router.patch('/', async (req, res) => {
     return res.status(400).json({ error: `design_style must be one of: ${VALID_DESIGNS.join(', ')}` });
   }
 
+  if (look_style !== undefined && !VALID_LOOKS.includes(look_style)) {
+    return res.status(400).json({ error: `look_style must be one of: ${VALID_LOOKS.join(', ')}` });
+  }
+
   // Only update fields that were actually sent, same pattern as the
   // existing product PATCH route — a merchant can save just the logo
   // without accidentally wiping their description, for example.
-  const fields = { logo_url, banner_url, description, theme, display_style, design_style };
+  const fields = { logo_url, banner_url, description, theme, display_style, design_style, look_style };
   const setParts = [];
   const values = [];
   let i = 1;
@@ -71,7 +76,7 @@ router.patch('/', async (req, res) => {
 
   values.push(req.businessId);
   const { rows } = await pool.query(
-    `UPDATE businesses SET ${setParts.join(', ')} WHERE id = $${i} RETURNING id, name, logo_url, banner_url, description, theme, display_style, design_style`,
+    `UPDATE businesses SET ${setParts.join(', ')} WHERE id = $${i} RETURNING id, name, logo_url, banner_url, description, theme, display_style, design_style, look_style`,
     values
   );
   res.json(rows[0]);
