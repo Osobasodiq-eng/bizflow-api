@@ -5,6 +5,7 @@ const pool = require('../db/pool');
 const { CHANNELS, sendReply } = require('../db/inbox');
 const { inboxAddress, inboundEnabled, emailConfigured } = require('../db/email');
 const { requireFeature, hasFeature } = require('../db/billing');
+const meta = require('../db/meta');
 
 // The inbox is a Growth+ feature. Messages keep arriving (nothing is lost) but reading/replying needs the plan; /summary stays open for the badge + upgrade card.
 router.use((req, res, next) => (req.method === 'GET' && req.path === '/summary') ? next() : requireFeature('inbox')(req, res, next));
@@ -47,6 +48,7 @@ router.get('/summary', async (req, res) => {
     unreadConversations: (await pool.query(`SELECT COUNT(*) AS n FROM inbox_conversations WHERE business_id = $1 AND status = 'open' AND unread_count > 0`, [req.businessId])).rows[0].n * 1,
     byChannel,
     email: { configured: emailConfigured(), address: inboxAddress(req.businessId), receiving: inboundEnabled() },
+    meta: { configured: meta.configured(), channels: await meta.listChannels(req.businessId) },
     channels: Object.entries(CHANNELS).map(([key, c]) => ({ key, label: c.label, ready: c.canReply })),
     locked: !(await hasFeature(req.businessId, 'inbox')),
   });
@@ -75,7 +77,8 @@ router.get('/conversations/:id', async (req, res) => {
   ]);
   if (c.unread_count > 0) await pool.query('UPDATE inbox_conversations SET unread_count = 0 WHERE id = $1', [c.id]);
   const conv = shapeConv({ ...c, unread_count: 0 }, stats[c.customer_id]);
-  res.json({ ...conv, canReply: !!(CHANNELS[c.channel] || {}).canReply, messages: msgs.rows.reverse().map(m => ({ id: m.id, direction: m.direction, body: m.body, status: m.status, error: m.error, at: m.created_at })) });
+  const win = ['whatsapp', 'instagram', 'facebook'].includes(c.channel) ? await meta.replyWindow(c.id) : null;
+  res.json({ ...conv, canReply: !!(CHANNELS[c.channel] || {}).canReply, replyWindow: win, messages: msgs.rows.reverse().map(m => ({ id: m.id, direction: m.direction, body: m.body, status: m.status, error: m.error, at: m.created_at })) });
 });
 
 router.post('/conversations/:id/reply', async (req, res) => {
