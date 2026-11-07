@@ -124,6 +124,8 @@ app.use('/api/unsubscribe', express.urlencoded({ extended: false }), safe(requir
 // Storefront "Message us" chat — public, per-store; and Mailgun delivering customer emails (signature-checked).
 app.use('/api/chat', safe(require('./routes/chat')));
 app.use('/api/inbound', safe(require('./routes/inbound')));
+// Meta (WhatsApp / Messenger / Instagram) calls this itself — protected by its signature, see routes/meta.js.
+app.use('/api/meta-webhook', safe(require('./routes/meta').webhook));
 
 // Paystack calls this itself (no login possible) — it is protected by
 // verifying Paystack's signature instead. See routes/paystack-webhook.js.
@@ -143,6 +145,7 @@ app.use('/api/billing', requireAuth, safe(require('./routes/billing')));
 app.use('/api/customers', requireAuth, safe(require('./routes/customers')));
 app.use('/api/products', requireAuth, safe(require('./routes/inventory')));
 app.use('/api/imagekit', requireAuth, safe(require('./routes/imagekit')));
+app.use('/api/meta', requireAuth, safe(require('./routes/meta').merchant));
 app.use('/api/domains', requireAuth, safe(require('./routes/domains')));
 app.use('/api/business', requireAuth, safe(require('./routes/business')));
 app.use('/api/delivery-zones', requireAuth, safe(require('./routes/delivery-zones')));
