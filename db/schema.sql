@@ -415,3 +415,24 @@ ALTER TABLE businesses ADD COLUMN IF NOT EXISTS custom_domain_status TEXT NOT NU
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS custom_domain_render_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_subdomain ON businesses (lower(subdomain)) WHERE subdomain IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_custom_domain ON businesses (lower(custom_domain)) WHERE custom_domain IS NOT NULL;
+
+-- Meta channels (WhatsApp Business, Facebook Messenger, Instagram) connected to a store's inbox.
+-- token = the page / business access token, encrypted by db/meta.js (never returned to the browser).
+CREATE TABLE IF NOT EXISTS meta_channels (
+  id SERIAL PRIMARY KEY,
+  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL,               -- whatsapp | facebook | instagram
+  external_id TEXT NOT NULL,           -- WhatsApp phone_number_id | Facebook page id | Instagram account id
+  name TEXT,
+  detail TEXT,                         -- phone number / @username
+  token TEXT NOT NULL,
+  waba_id TEXT,
+  page_id TEXT,                        -- Instagram: the page it is linked through
+  fb_user_id TEXT,                     -- who connected it (used for Meta's data-deletion callback)
+  status TEXT NOT NULL DEFAULT 'active', -- active | error
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (channel, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_meta_channels_business ON meta_channels(business_id);
+ALTER TABLE inbox_conversations ADD COLUMN IF NOT EXISTS meta_channel_id INTEGER;

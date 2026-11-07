@@ -6,13 +6,14 @@
 const pool = require('./pool');
 const { sendInboxEmail, emailConfigured } = require('./email');
 const { notify } = require('./notifications');
+const meta = require('./meta');
 
 const CHANNELS = {
   chat:      { label: 'Storefront chat', canReply: true },
   email:     { label: 'Email', canReply: true },
-  whatsapp:  { label: 'WhatsApp', canReply: false },
-  instagram: { label: 'Instagram', canReply: false },
-  facebook:  { label: 'Facebook', canReply: false },
+  whatsapp:  { label: 'WhatsApp', canReply: true },
+  instagram: { label: 'Instagram', canReply: true },
+  facebook:  { label: 'Facebook Messenger', canReply: true },
 };
 
 const preview = text => String(text).replace(/\s+/g, ' ').trim().slice(0, 140);
@@ -87,6 +88,10 @@ async function sendReply(businessId, conversationId, body) {
     const r = await sendInboxEmail({ businessId, to: conv.contact_handle, fromName: biz && biz.name, subject: subj, text, inReplyTo: conv.last_inbound_external_id });
     if (!r.sent) error = r.detail || 'Could not send';
     externalId = r.messageId || null;
+  }
+  else if (conv.channel === 'whatsapp' || conv.channel === 'instagram' || conv.channel === 'facebook') {
+    try { externalId = await meta.sendText(conv, text); }
+    catch (e) { if (e && e.status === 400) throw e; error = (e && e.message) || 'Could not send'; }
   }
   // chat: the visitor's widget reads the reply from here — nothing to send.
 
