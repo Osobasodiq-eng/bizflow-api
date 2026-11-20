@@ -51,7 +51,7 @@ function shopLink(businessId, campaignId, code, store) {
     const q = [store.param, campaignId ? `c=${campaignId}` : '', code ? `code=${encodeURIComponent(code)}` : ''].filter(Boolean).join('&');
     return `${store.base}/${q ? '?' + q : ''}`;
   }
-  const base = (process.env.STOREFRONT_URL || '').replace(/\/+$/, '');
+  const base = (process.env.STOREFRONT_URL || '').split(/[?#]/)[0].replace(/\/+$/, '');
   if (!base) return null;
   return `${base}?business=${businessId}${campaignId ? `&c=${campaignId}` : ''}${code ? `&code=${encodeURIComponent(code)}` : ''}`;
 }

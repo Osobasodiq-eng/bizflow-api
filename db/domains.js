@@ -10,7 +10,7 @@ const { hasFeature } = require('./billing');
 
 const clean = v => String(v || '').trim().toLowerCase();
 const BASE = () => clean(process.env.STORE_BASE_DOMAIN).replace(/^https?:\/\//, '').replace(/^\*?\./, '').replace(/\/.*$/, '');
-const FALLBACK = () => (process.env.STOREFRONT_URL || 'https://bizflow-storefront.onrender.com').replace(/\/+$/, '');
+const FALLBACK = () => (process.env.STOREFRONT_URL || 'https://bizflow-storefront.onrender.com').split(/[?#]/)[0].replace(/\/+$/, '');
 const CNAME_TARGET = () => clean(process.env.STOREFRONT_CNAME_TARGET) || 'bizflow-storefront.onrender.com';
 const A_RECORD = () => clean(process.env.STOREFRONT_A_RECORD) || '216.24.57.1';
 
