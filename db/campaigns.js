@@ -200,7 +200,7 @@ async function tick() {
         notify(c.business_id, { type: 'campaign', link: 'marketing', title: 'A scheduled campaign could not be sent', body: String(err.message || 'Something went wrong').slice(0, 200) });
       }
     }
-    await require('./automations').runAutomations();
+    // (automations run on their own timer: see startAutomations in db/automations.js)
 
     const { rows: sending } = await pool.query(`SELECT id FROM campaigns WHERE status = 'sending'`);
     for (const c of sending) if (!active.has(c.id)) sendInBackground(c.id);
