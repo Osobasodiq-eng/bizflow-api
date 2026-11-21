@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BizFlow — Admin</title>
+<meta name="color-scheme" content="dark light">
+<script>
+(function(){try{var t=localStorage.getItem('kooza_theme');if(t!=='light'&&t!=='dark')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();
+</script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/3.44.0/tabler-icons.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root,[data-theme="dark"]{
+  --g:#2FAF9E; --g2:#2FAF9E; --bg:#0A1F33; --border:#20415F; --card:#122E4A;
+  --text:#EDF2F5; --text-secondary:#93A9BD;
+  --amber:#D89A3D; --blue:#6FA8F0; --rose:#F0716F; --grid:#20415F;
+  --on-g:#0A1F33; --g-t:var(--g-t); --rose-t:var(--rose-t); --rose-b:var(--rose-b); --gray-t:var(--gray-t);
+  --hover:var(--hover); --ring:rgba(47,175,158,.16); --overlay:rgba(5,14,24,.65); --shadow-color:rgba(0,0,0,.45);
+  --font:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  color-scheme:dark;
+}
+:root[data-theme="light"]{
+  --g:#0E7567; --g2:#0E7567; --bg:#F2F5F9; --border:#DFE6EE; --card:#FFFFFF;
+  --text:#0E2438; --text-secondary:#546C82;
+  --amber:#9A5700; --blue:#2A6AC8; --rose:#C0332E; --grid:#DFE6EE;
+  --on-g:#FFFFFF; --g-t:rgba(14,117,103,.10); --rose-t:rgba(192,51,46,.09); --rose-b:rgba(192,51,46,.35); --gray-t:rgba(84,108,130,.12);
+  --hover:rgba(14,36,56,.04); --ring:rgba(14,117,103,.18); --overlay:rgba(14,36,56,.45); --shadow-color:rgba(14,36,56,.16);
+  color-scheme:light;
+}
+.theme-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;border-radius:9px;background:var(--card);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;font-size:17px}
+.theme-btn:hover{color:var(--text)}
+.theme-btn:focus-visible{outline:2px solid var(--g);outline-offset:2px}
+.theme-btn .ti-sun{display:none}:root[data-theme="dark"] .theme-btn .ti-sun{display:inline}:root[data-theme="dark"] .theme-btn .ti-moon{display:none}
+.theme-float{position:fixed;top:14px;right:14px;z-index:210}
+.kz-theming,.kz-theming *{transition:background-color .25s ease,border-color .25s ease,color .2s ease!important}
+*{box-sizing:border-box;margin:0;padding:0}
+body{-webkit-font-smoothing:antialiased;font-family:var(--font);background:var(--bg);color:var(--text);min-height:100vh}
+input{font-size:13px;padding:11px 13px;border:1px solid var(--border);border-radius:9px;background:var(--bg);color:var(--text);outline:none;width:100%}
+input:focus{border-color:var(--g2);box-shadow:0 0 0 3px var(--ring)}
+
+/* Login screen */
+#login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center}
+.login-card{width:360px;max-width:90vw;background:var(--card);border-radius:16px;padding:36px 32px;border:1px solid var(--border);box-shadow:0 20px 50px var(--shadow-color)}
+.logo-row{display:flex;align-items:center;gap:9px;justify-content:center;margin-bottom:22px}
+
+/* Admin dashboard */
+#admin-screen{display:none;max-width:1100px;margin:0 auto;padding:32px 24px}
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}
+.topbar h1{font-size:20px;font-weight:600;display:flex;align-items:center;gap:8px}
+.logout-link{font-size:13px;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;gap:5px}
+.logout-link:hover{color:var(--g)}
+
+.stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
+.stat-card{background:var(--card);border-radius:12px;padding:18px;border:1px solid var(--border);display:flex;flex-direction:column;gap:2px}
+.stat-label{font-size:11.5px;color:var(--text-secondary);margin-bottom:2px}
+.stat-val{font-size:22px;font-weight:600}
+.stat-spark-wrap{position:relative;width:100%;height:32px;margin-top:6px}
+.stat-spark{position:absolute;top:0;left:0;width:100%;height:100%}
+
+.section-label{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-secondary);margin:26px 0 12px}
+.charts-grid{display:grid;grid-template-columns:1.4fr 1fr;gap:14px;margin-bottom:14px}
+.charts-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:6px}
+.chart-card{background:var(--card);border-radius:14px;border:1px solid var(--border);padding:18px 20px}
+.chart-card-head{display:flex;flex-direction:column;gap:2px;margin-bottom:14px}
+.chart-title{font-size:14px;font-weight:600}
+.chart-sub{font-size:11px;color:var(--text-secondary)}
+.chart-canvas-wrap{position:relative;height:220px}
+.chart-canvas-wrap.short{height:180px}
+.legend-row{display:flex;gap:16px;margin-top:10px;flex-wrap:wrap}
+.legend-item{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-secondary)}
+.legend-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+
+@media (max-width: 860px){
+  .charts-grid, .charts-grid-2{grid-template-columns:1fr}
+}
+
+.table-card{background:var(--card);border-radius:14px;border:1px solid var(--border);overflow:hidden}
+.table-head{padding:16px 20px;border-bottom:1px solid var(--border);font-size:15px;font-weight:600;display:flex;justify-content:space-between;align-items:center}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:11.5px;color:var(--text-secondary);padding:10px 20px;border-bottom:1px solid var(--border)}
+td{padding:12px 20px;font-size:13px;border-bottom:1px solid var(--border)}
+tr:last-child td{border-bottom:none}
+.biz-name{font-weight:500}
+.biz-email{font-size:11.5px;color:var(--text-secondary)}
+.fa-list{font-size:12.5px;line-height:1.9;margin-top:6px;color:var(--text)}.fa-list span{display:inline-block;margin:0 6px 4px 0;padding:2px 9px;border-radius:999px;background:var(--g-t);border:1px solid var(--border)}.fa-list b{color:var(--g);margin-left:4px}
+.fx-box{margin:6px 0 18px;display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.fx-item{border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.6}.fx-item .t{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--text-secondary);margin-bottom:2px}.fx-ok{color:#1a7f5a;font-weight:600}.fx-warn{color:#c0392b;font-weight:600}.fx-mini{margin-top:6px;font-size:11.5px;padding:3px 8px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-secondary);cursor:pointer}
+@media(max-width:980px){#fa-row{grid-template-columns:repeat(2,1fr)!important}#fa-looks{grid-template-columns:1fr!important}.fx-box{grid-template-columns:1fr}}
+.btn-plan{background:var(--g-t);color:var(--g);border:1px solid var(--border);border-radius:7px;padding:6px 10px;font-size:12px;cursor:pointer}
+.btn-plan:hover{border-color:var(--g)}
+.plan-badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;background:var(--gray-t);color:var(--text-secondary)}
+.plan-badge.paid{background:var(--g-t);color:var(--g)}.plan-badge.trial{background:rgba(111,168,240,.15);color:var(--blue)}
+.del-btn{background:var(--rose-t);color:var(--rose);border:1px solid var(--rose-b);border-radius:7px;padding:6px 10px;font-size:12px;cursor:pointer}
+.del-btn:hover{background:var(--rose-t)}
+.empty-state{padding:40px;text-align:center;color:var(--text-secondary);font-size:13px}
+
+@media (max-width: 700px){
+  #admin-screen{padding:20px 14px}
+  .stat-row{grid-template-columns:repeat(2,1fr)}
+  table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}
+}
+@media (max-width: 420px){
+  .stat-row{grid-template-columns:1fr}
+}
+
+/* Store detail modal */
+.biz-row{cursor:pointer}
+.biz-row:hover{background:var(--hover)}
+.modal-overlay{display:none;position:fixed;inset:0;background:var(--overlay);z-index:100;align-items:center;justify-content:center;padding:20px}
+.modal-overlay.open{display:flex}
+.modal-card{background:var(--card);border-radius:16px;width:640px;max-width:100%;max-height:88vh;overflow-y:auto;padding:26px 28px}
+.modal-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px}
+.modal-title{font-size:17px;font-weight:600}
+.modal-sub{font-size:12.5px;color:var(--text-secondary);margin-top:3px}
+.modal-close{cursor:pointer;color:var(--text-secondary);font-size:20px;line-height:1;padding:2px 6px}
+.modal-close:hover{color:var(--text)}
+.modal-stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
+.modal-stat{background:var(--bg);border-radius:10px;padding:12px 14px}
+.modal-stat-label{font-size:10.5px;color:var(--text-secondary);margin-bottom:4px}
+.modal-stat-val{font-size:16px;font-weight:600}
+.modal-chart-wrap{position:relative;height:220px}
+.modal-loading{text-align:center;color:var(--text-secondary);font-size:13px;padding:30px 0}
+
+.health-row{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:6px}
+.health-card{background:var(--card);border-radius:12px;padding:16px;border:1px solid var(--border)}
+.health-label{font-size:11px;color:var(--text-secondary);margin-bottom:6px}
+.health-val{font-size:19px;font-weight:600}
+.health-sub{font-size:10.5px;color:var(--text-secondary);margin-top:3px}
+@media (max-width: 980px){ .health-row{grid-template-columns:repeat(3,1fr)} }
+@media (max-width: 620px){ .health-row{grid-template-columns:repeat(2,1fr)} }
+
+.status-badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:20px;margin-top:3px}
+.status-active{background:var(--g-t);color:var(--g)}
+.status-dormant{background:var(--gray-t);color:var(--text-secondary)}
+
+/* ---------- admin shell: sidebar + pages ---------- */
+#admin-screen{max-width:none!important;margin:0!important;padding:0!important;min-height:100vh}
+#admin-screen[style*="block"]{display:grid!important;grid-template-columns:248px minmax(0,1fr)}
+.side{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:6px;padding:22px 14px 16px;background:var(--card);border-right:1px solid var(--border)}
+.side-brand{display:flex;align-items:center;gap:11px;padding:2px 10px 18px;border-bottom:1px solid var(--border);margin-bottom:10px}
+.side-brand>i{font-size:22px;color:var(--on-g);background:var(--g);width:38px;height:38px;border-radius:11px;display:grid;place-items:center}
+.side-brand b{display:block;font-size:16px;font-weight:700;letter-spacing:-.2px}.side-brand span{display:block;font-size:11.5px;color:var(--text-secondary)}
+.side-nav{display:flex;flex-direction:column;gap:3px}
+.nav-i{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;color:var(--text-secondary);text-decoration:none;font-size:13.5px;font-weight:500;transition:background .15s,color .15s}
+.nav-i i{font-size:18px}.nav-i em{margin-left:auto;font-style:normal;font-size:11px;padding:1px 8px;border-radius:999px;background:var(--g-t);color:var(--g)}
+.nav-i:hover{background:var(--g-t);color:var(--text)}
+.nav-i.on{background:var(--g);color:var(--on-g)}.nav-i.on em{background:rgba(255,255,255,.25);color:inherit}
+.side-foot{margin-top:auto;display:flex;align-items:center;justify-content:space-between;padding:12px 8px 0;border-top:1px solid var(--border)}
+.main{padding:30px clamp(18px,3vw,44px) 60px;max-width:1280px;width:100%}
+.pg{display:none}.pg.on{display:block;animation:pgIn .25s ease}
+@keyframes pgIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.pg-head{margin-bottom:22px}.pg-head h2{font-size:24px;font-weight:700;letter-spacing:-.3px}.pg-head p{font-size:13px;color:var(--text-secondary);margin-top:3px}
+@media(max-width:860px){
+  #admin-screen[style*="block"]{grid-template-columns:1fr}
+  .side{position:static;height:auto;flex-direction:row;align-items:center;flex-wrap:wrap;padding:10px 12px;gap:8px;border-right:0;border-bottom:1px solid var(--border)}
+  .side-brand{border:0;margin:0;padding:0}.side-brand span{display:none}
+  .side-nav{order:3;flex-direction:row;overflow-x:auto;width:100%;padding-bottom:2px}.nav-i{white-space:nowrap;padding:8px 11px}
+  .side-foot{margin:0 0 0 auto;border:0;padding:0;gap:12px}
+  .main{padding:20px 14px 40px}
+}
+</style>
+</head>
+<body>
+
+<div id="login-screen">
+  <button class="theme-btn theme-float" type="button" onclick="kzToggleTheme()" data-theme-toggle aria-label="Switch to light mode" title="Switch theme"><i class="ti ti-sun" aria-hidden="true"></i><i class="ti ti-moon" aria-hidden="true"></i></button>
+  <div class="login-card">
+    <div class="logo-row">
+      <svg width="28" height="28" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" style="fill:var(--card)"/><path d="M11 27 L11 13" style="stroke:var(--text)" stroke-width="3" stroke-linecap="round"/><path d="M20 27 L20 9" style="stroke:var(--text)" stroke-width="3" stroke-linecap="round" opacity="0.85"/><path d="M29 27 L29 17" style="stroke:var(--text)" stroke-width="3" stroke-linecap="round"/><path d="M8 20 L32 12" stroke="#8FD5C9" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+      <span style="font-size:17px;font-weight:600">BizFlow Admin</span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <input id="login-email" type="email" placeholder="Admin email">
+      <input id="login-password" type="password" placeholder="Password">
+      <div id="login-error" style="color:var(--rose);font-size:12px;min-height:14px"></div>
+      <button onclick="doLogin()" style="width:100%;padding:11px;border:none;border-radius:9px;background:var(--g);color:var(--on-g);font-size:14px;font-weight:600;cursor:pointer">Log in</button>
+      <div style="text-align:center;font-size:12.5px;color:var(--text-secondary);cursor:pointer" onclick="showForgotScreen()">Forgot password?</div>
+    </div>
+  </div>
+</div>
+
+<div id="forgot-screen" style="display:none;min-height:100vh;align-items:center;justify-content:center">
+  <div class="login-card">
+    <div class="logo-row">
+      <svg width="28" height="28" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" style="fill:var(--card)"/><path d="M11 27 L11 13" style="stroke:var(--text)" stroke-width="3" stroke-linecap="round"/><path d="M20 27 L20 9" style="stroke:var(--text)" stroke-width="3" stroke-linecap="round" opacity="0.85"/><path d="M29 27 L29 17" style="stroke:var(--text)" stroke-width="3" stroke-linecap="round"/><path d="M8 20 L32 12" stroke="#8FD5C9" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+      <span style="font-size:17px;font-weight:600">Reset password</span>
+    </div>
+    <div id="forgot-form" style="display:flex;flex-direction:column;gap:12px">
+      <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:2px">Enter your admin email and we'll send you a link to reset your password.</div>
+      <input id="forgot-email" type="email" placeholder="Admin email">
+      <div id="forgot-error" style="color:var(--rose);font-size:12px;min-height:14px"></div>
+      <button onclick="submitForgotPassword()" style="width:100%;padding:11px;border:none;border-radius:9px;background:var(--g);color:var(--on-g);font-size:14px;font-weight:600;cursor:pointer">Send reset link</button>
+      <div style="text-align:center;font-size:12.5px;color:var(--text-secondary);cursor:pointer" onclick="backToLogin()">Back to log in</div>
+    </div>
+    <div id="forgot-success" style="display:none;flex-direction:column;gap:14px;text-align:center">
+      <div style="font-size:13px;color:var(--text)">If that email is registered, a reset link is on its way. Check your inbox — the link expires in 30 minutes.</div>
+      <div style="text-align:center;font-size:12.5px;color:var(--g2);cursor:pointer;font-weight:600" onclick="backToLogin()">Back to log in</div>
+    </div>
+  </div>
+</div>
+
+<div id="reset-screen" style="display:none;min-height:100vh;align-items:center;justify-content:center">
+  <div class="login-card">
+    <div class="logo-row">
+      <svg width="28" height="28" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" style="fill:var(--card)"/><path d="M11 27 L11 13" style="stroke:var(--text)" stroke-width="3" stroke-linecap="round"/><path d="M20 27 L20 9" style="stroke:var(--text)" stroke-width="3" stroke-linecap="round" opacity="0.85"/><path d="M29 27 L29 17" style="stroke:var(--text)" stroke-width="3" stroke-linecap="round"/><path d="M8 20 L32 12" stroke="#8FD5C9" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+      <span style="font-size:17px;font-weight:600">Set a new password</span>
+    </div>
+    <div id="reset-form" style="display:flex;flex-direction:column;gap:12px">
+      <input id="reset-password" type="password" placeholder="New password (min 8 characters)">
+      <input id="reset-password-confirm" type="password" placeholder="Confirm new password">
+      <div id="reset-error" style="color:var(--rose);font-size:12px;min-height:14px"></div>
+      <button onclick="submitResetPassword()" style="width:100%;padding:11px;border:none;border-radius:9px;background:var(--g);color:var(--on-g);font-size:14px;font-weight:600;cursor:pointer">Update password</button>
+    </div>
+    <div id="reset-success" style="display:none;flex-direction:column;gap:14px;text-align:center">
+      <div style="font-size:13px;color:var(--text)">Your password has been updated.</div>
+      <div style="text-align:center;font-size:12.5px;color:var(--g2);cursor:pointer;font-weight:600" onclick="backToLogin()">Go to log in</div>
+    </div>
+  </div>
+</div>
+
+<div id="admin-screen">
+  <aside class="side" id="side">
+    <div class="side-brand"><i class="ti ti-shield-lock" aria-hidden="true"></i><div><b>Kooza</b><span>Platform admin</span></div></div>
+    <nav class="side-nav"><a class="nav-i on" href="#overview" data-go="overview" onclick="showPage('overview');return false"><i class="ti ti-layout-dashboard" aria-hidden="true"></i><span>Overview</span></a><a class="nav-i" href="#revenue" data-go="revenue" onclick="showPage('revenue');return false"><i class="ti ti-credit-card" aria-hidden="true"></i><span>Subscriptions</span></a><a class="nav-i" href="#features" data-go="features" onclick="showPage('features');return false"><i class="ti ti-apps" aria-hidden="true"></i><span>Feature adoption</span></a><a class="nav-i" href="#channels" data-go="channels" onclick="showPage('channels');return false"><i class="ti ti-messages" aria-hidden="true"></i><span>Messaging channels</span></a><a class="nav-i" href="#businesses" data-go="businesses" onclick="showPage('businesses');return false"><i class="ti ti-building-store" aria-hidden="true"></i><span>Businesses</span><em id=nav-biz-count></em></a></nav>
+    <div class="side-foot">
+      <button class="theme-btn" type="button" onclick="kzToggleTheme()" data-theme-toggle aria-label="Switch to light mode" title="Switch theme"><i class="ti ti-sun" aria-hidden="true"></i><i class="ti ti-moon" aria-hidden="true"></i></button>
+      <div class="logout-link" onclick="logout()"><i class="ti ti-logout" aria-hidden="true"></i> Log out</div>
+    </div>
+  </aside>
+  <main class="main">
+  <section class="pg on" id="pg-overview" data-pg="overview">
+    <div class="pg-head"><h2>Overview</h2><p>How the platform is doing right now</p></div>
+<div class="stat-row" id="stat-row">
+    <div class="stat-card">
+      <div class="stat-label">Total businesses</div><div class="stat-val" id="stat-businesses">—</div>
+      <div class="stat-spark-wrap"><canvas class="stat-spark" id="spark-businesses"></canvas></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">New this week</div><div class="stat-val" id="stat-new">—</div>
+      <div class="stat-spark-wrap"><canvas class="stat-spark" id="spark-new"></canvas></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total orders</div><div class="stat-val" id="stat-orders">—</div>
+      <div class="stat-spark-wrap"><canvas class="stat-spark" id="spark-orders"></canvas></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total revenue</div><div class="stat-val" id="stat-revenue">—</div>
+      <div class="stat-spark-wrap"><canvas class="stat-spark" id="spark-revenue"></canvas></div>
+    </div>
+  </div>
+
+  <div class="section-label">Health</div>
+  <div class="health-row" id="health-row">
+    <div class="health-card"><div class="health-label">Avg order value</div><div class="health-val" id="health-aov">—</div></div>
+    <div class="health-card"><div class="health-label">Payment success rate</div><div class="health-val" id="health-payment-rate">—</div></div>
+    <div class="health-card"><div class="health-label">Active stores</div><div class="health-val" id="health-active">—</div><div class="health-sub" id="health-active-sub">Ordered in last 30 days</div></div>
+    <div class="health-card"><div class="health-label">Activation rate</div><div class="health-val" id="health-activation">—</div><div class="health-sub">Stores with ≥1 sale ever</div></div>
+    <div class="health-card"><div class="health-label">Repeat customer rate</div><div class="health-val" id="health-repeat">—</div></div>
+  </div>
+
+  <div class="section-label">Growth</div>
+  <div class="charts-grid">
+    <div class="chart-card">
+      <div class="chart-card-head">
+        <div class="chart-title">Revenue &amp; orders growth</div>
+        <div class="chart-sub" data-growth-sub>Cumulative totals, grouped by each business's signup week</div>
+      </div>
+      <div class="chart-canvas-wrap"><canvas id="chart-growth"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-card-head">
+        <div class="chart-title">New businesses per week</div>
+        <div class="chart-sub">Last 8 weeks, by signup date</div>
+      </div>
+      <div class="chart-canvas-wrap"><canvas id="chart-signups"></canvas></div>
+    </div>
+  </div>
+
+  <div class="charts-grid-2">
+    <div class="chart-card">
+      <div class="chart-card-head">
+        <div class="chart-title">Top businesses by revenue</div>
+        <div class="chart-sub">Highest earners on the platform right now</div>
+      </div>
+      <div class="chart-canvas-wrap short"><canvas id="chart-top-businesses"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-card-head">
+        <div class="chart-title">Revenue concentration</div>
+        <div class="chart-sub">Share of total revenue from top 5 businesses</div>
+      </div>
+      <div class="chart-canvas-wrap short"><canvas id="chart-revenue-share"></canvas></div>
+      <div class="legend-row" id="revenue-share-legend"></div>
+    </div>
+  </div>
+
+
+  </section>
+  <section class="pg" id="pg-revenue" data-pg="revenue">
+    <div class="pg-head"><h2>Subscriptions</h2><p>What Kooza earns from merchant plans</p></div>
+
+  <div class="health-row" id="bill-row">
+    <div class="health-card"><div class="health-label">Monthly recurring revenue</div><div class="health-val" id="bill-mrr">—</div><div class="health-sub">Auto-renewing paid plans</div></div>
+    <div class="health-card"><div class="health-label">Growth</div><div class="health-val" id="bill-growth">—</div></div>
+    <div class="health-card"><div class="health-label">Pro</div><div class="health-val" id="bill-pro">—</div></div>
+    <div class="health-card"><div class="health-label">On free trial</div><div class="health-val" id="bill-trial">—</div></div>
+    <div class="health-card"><div class="health-label">Starter (free)</div><div class="health-val" id="bill-free">—</div></div>
+  </div>
+
+
+  </section>
+  <section class="pg" id="pg-features" data-pg="features">
+    <div class="pg-head"><h2>Feature adoption</h2><p>What merchants are actually using</p></div>
+
+  <div class="health-row" id="fa-row" style="grid-template-columns:repeat(4,1fr)">
+    <div class="health-card"><div class="health-label">Store addresses</div><div class="health-val" id="fa-addr">—</div><div class="health-sub" id="fa-addr-sub">subdomains · own domains</div></div>
+    <div class="health-card"><div class="health-label">Channels connected</div><div class="health-val" id="fa-chan">—</div><div class="health-sub" id="fa-chan-sub">WhatsApp · Messenger · Instagram</div></div>
+    <div class="health-card"><div class="health-label">Inbox conversations</div><div class="health-val" id="fa-inbox">—</div><div class="health-sub" id="fa-inbox-sub">across all channels</div></div>
+    <div class="health-card"><div class="health-label">Campaigns</div><div class="health-val" id="fa-camp">—</div><div class="health-sub" id="fa-camp-sub">sent</div></div>
+    <div class="health-card"><div class="health-label">Automations on</div><div class="health-val" id="fa-auto">—</div><div class="health-sub" id="fa-auto-sub">stores</div></div>
+    <div class="health-card"><div class="health-label">Discount codes</div><div class="health-val" id="fa-disc">—</div><div class="health-sub" id="fa-disc-sub">active</div></div>
+    <div class="health-card"><div class="health-label">Store-wide sales</div><div class="health-val" id="fa-sales">—</div><div class="health-sub" id="fa-sales-sub">running now</div></div>
+    <div class="health-card"><div class="health-label">Paystack payouts</div><div class="health-val" id="fa-pay">—</div><div class="health-sub" id="fa-pay-sub">stores with a bank account</div></div>
+  </div>
+  <div class="table-wrap" style="padding:16px 18px;margin:12px 0 24px;display:grid;grid-template-columns:repeat(3,1fr);gap:18px" id="fa-looks">
+    <div><div class="health-label">Store looks</div><div id="fa-look-list" class="fa-list">—</div></div>
+    <div><div class="health-label">Store designs</div><div id="fa-design-list" class="fa-list">—</div></div>
+    <div><div class="health-label">Product display styles</div><div id="fa-display-list" class="fa-list">—</div></div>
+  </div>
+
+
+  </section>
+  <section class="pg" id="pg-channels" data-pg="channels">
+    <div class="pg-head"><h2>Messaging channels</h2><p>WhatsApp, Messenger and Instagram setup</p></div>
+
+  <div class="table-wrap" style="padding:16px 18px;margin-bottom:24px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <div style="font-size:13px;color:var(--text-secondary);flex:1;min-width:220px">Checks the WhatsApp, Messenger and Instagram setup against what Meta has on file.</div>
+      <button class="btn" id="mc-run" onclick="loadMetaCheck()">Run check</button>
+    </div>
+    <div id="mc-body" style="margin-top:12px;font-size:13px"></div>
+  </div>
+
+
+  </section>
+  <section class="pg" id="pg-businesses" data-pg="businesses">
+    <div class="pg-head"><h2>Businesses</h2><p>Every store on the platform</p></div>
+
+  <div class="table-card">
+    <div class="table-head">All businesses <span id="biz-count" style="font-weight:400;font-size:12px;color:var(--text-secondary)"></span></div>
+    <div style="padding:14px 20px;border-bottom:1px solid var(--border)">
+      <input type="text" id="biz-search" placeholder="Search by business name or owner email..." oninput="filterBusinesses()">
+    </div>
+    <table>
+      <thead><tr><th>Business</th><th>Plan</th><th>Signed up</th><th>Products</th><th>Customers</th><th>Orders</th><th>Revenue</th><th></th></tr></thead>
+      <tbody id="biz-tbody"><tr><td colspan="8" class="empty-state">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  </section>
+  </main>
+</div>
+
+<div class="modal-overlay" id="store-modal-overlay" onclick="if(event.target===this) closeStoreDetail()">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title" id="modal-store-name">—</div>
+        <div class="modal-sub" id="modal-store-sub">—</div>
+      </div>
+      <div class="modal-close" onclick="closeStoreDetail()">&times;</div>
+    </div>
+
+    <div class="modal-stat-row">
+      <div class="modal-stat"><div class="modal-stat-label">Products</div><div class="modal-stat-val" id="modal-products">—</div></div>
+      <div class="modal-stat"><div class="modal-stat-label">Customers</div><div class="modal-stat-val" id="modal-customers">—</div></div>
+      <div class="modal-stat"><div class="modal-stat-label">Orders</div><div class="modal-stat-val" id="modal-orders">—</div></div>
+      <div class="modal-stat"><div class="modal-stat-label">Total revenue</div><div class="modal-stat-val" id="modal-revenue">—</div></div>
+    </div>
+    <div class="modal-stat-row">
+      <div class="modal-stat"><div class="modal-stat-label">Avg order value</div><div class="modal-stat-val" id="modal-aov">—</div></div>
+      <div class="modal-stat"><div class="modal-stat-label">Status</div><div class="modal-stat-val" id="modal-status">—</div></div>
+      <div class="modal-stat"><div class="modal-stat-label">Days to first sale</div><div class="modal-stat-val" id="modal-days-to-sale">—</div></div>
+      <div class="modal-stat"><div class="modal-stat-label">Last order</div><div class="modal-stat-val" id="modal-last-order">—</div></div>
+    </div>
+
+    <div class="chart-title" style="margin-bottom:8px">Setup &amp; features</div>
+    <div class="fx-box" id="modal-features"><div class="fx-item" style="grid-column:1/-1;color:var(--text-secondary)">Loading…</div></div>
+
+    <div class="chart-title" style="margin-bottom:4px">Orders &amp; revenue over time</div>
+    <div class="chart-sub" style="margin-bottom:12px" id="modal-chart-sub">Last 8 weeks for this store</div>
+    <div class="modal-chart-wrap">
+      <div class="modal-loading" id="modal-chart-loading">Loading chart…</div>
+      <canvas id="modal-store-chart"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+// Same API_BASE as the main dashboard — this admin panel talks to the same backend.
+const API_BASE = 'https://bizflow-api-v0sd.onrender.com';
+
+function apiFetch(url, options = {}) {
+  const token = localStorage.getItem('bizflow_admin_token');
+  const headers = { ...(options.headers || {}) };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return fetch(url, { ...options, headers }).then(r => {
+    // an expired or invalid saved login: clear it and go back to the sign-in screen
+    if (r.status === 401 && token) {
+      try { localStorage.removeItem('bizflow_admin_token'); } catch (e) {}
+      document.getElementById('admin-screen').style.display = 'none';
+      document.getElementById('login-screen').style.display = 'flex';
+      const er = document.getElementById('login-error'); if (er) er.textContent = 'Your session expired. Please log in again.';
+    }
+    return r;
+  });
+}
+
+function naira(n) { return '₦' + Number(n).toLocaleString(); }
+
+async function doLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errorEl = document.getElementById('login-error');
+  try {
+    const response = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Login failed');
+
+    localStorage.setItem('bizflow_admin_token', data.token);
+
+    // Confirm this account is ACTUALLY an admin before showing the panel —
+    // a valid login isn't enough, ADMIN_EMAILS has to include this email too.
+    const check = await apiFetch(`${API_BASE}/api/admin/stats`);
+    if (check.status === 403) {
+      localStorage.removeItem('bizflow_admin_token');
+      throw new Error('This account is not authorized for admin access.');
+    }
+
+    enterAdmin();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+function logout() {
+  localStorage.removeItem('bizflow_admin_token');
+  location.reload();
+}
+
+// ---------- Forgot / reset password ----------
+function showForgotScreen() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('forgot-screen').style.display = 'flex';
+  document.getElementById('forgot-form').style.display = 'flex';
+  document.getElementById('forgot-success').style.display = 'none';
+  document.getElementById('forgot-error').textContent = '';
+}
+
+function backToLogin() {
+  document.getElementById('forgot-screen').style.display = 'none';
+  document.getElementById('reset-screen').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+  // Clear the token from the URL so refreshing doesn't reopen the reset screen
+  if (window.history.replaceState) {
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
+}
+
+async function submitForgotPassword() {
+  const email = document.getElementById('forgot-email').value.trim();
+  const errorEl = document.getElementById('forgot-error');
+  errorEl.textContent = '';
+  if (!email) { errorEl.textContent = 'Enter your email address.'; return; }
+
+  try {
+    const response = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || 'Something went wrong. Try again.');
+    }
+    document.getElementById('forgot-form').style.display = 'none';
+    document.getElementById('forgot-success').style.display = 'flex';
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+async function submitResetPassword() {
+  const password = document.getElementById('reset-password').value;
+  const confirm = document.getElementById('reset-password-confirm').value;
+  const errorEl = document.getElementById('reset-error');
+  errorEl.textContent = '';
+
+  if (password.length < 8) { errorEl.textContent = 'Password must be at least 8 characters.'; return; }
+  if (password !== confirm) { errorEl.textContent = 'Passwords do not match.'; return; }
+
+  const token = new URLSearchParams(window.location.search).get('token');
+  if (!token) { errorEl.textContent = 'Reset link is missing its token.'; return; }
+
+  try {
+    const response = await fetch(`${API_BASE}/api/auth/reset-password`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, password })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'This reset link is invalid or has expired.');
+
+    document.getElementById('reset-form').style.display = 'none';
+    document.getElementById('reset-success').style.display = 'flex';
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+// If the page was opened from a reset-password email link (?token=...),
+// skip straight to the "set a new password" screen.
+(function checkForResetToken() {
+  const token = new URLSearchParams(window.location.search).get('token');
+  if (token) {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('reset-screen').style.display = 'flex';
+  }
+})();
+
+async function enterAdmin() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('admin-screen').style.display = 'block';
+  loadFeatures();
+  try { await Promise.all([loadStats(), loadBusinesses()]); } catch (e) { console.error(e); }
+  loadMetaCheck();
+}
+
+async function loadStats() {
+  const s = await apiFetch(`${API_BASE}/api/admin/stats`).then(r => r.json());
+  document.getElementById('stat-businesses').textContent = s.totalBusinesses;
+  document.getElementById('stat-new').textContent = s.newBusinessesThisWeek;
+  document.getElementById('stat-orders').textContent = s.totalOrders;
+  document.getElementById('stat-revenue').textContent = naira(s.totalRevenue);
+
+  const pct = n => (n === undefined || n === null) ? '—' : `${n.toFixed(1)}%`;
+  document.getElementById('health-aov').textContent = s.avgOrderValue !== undefined ? naira(Math.round(s.avgOrderValue)) : '—';
+  document.getElementById('health-payment-rate').textContent = pct(s.paymentSuccessRate);
+  document.getElementById('health-active').textContent = s.activeStores !== undefined ? s.activeStores : '—';
+  document.getElementById('health-active-sub').textContent = s.dormantStores !== undefined ? `Ordered in last 30 days · ${s.dormantStores} dormant` : 'Ordered in last 30 days';
+  document.getElementById('health-activation').textContent = pct(s.activationRate);
+  document.getElementById('health-repeat').textContent = pct(s.repeatCustomerRate);
+}
+
+function planBadge(b) {
+  const trial = b.planState === 'trial', paid = b.plan !== 'free' && !trial;
+  const until = b.periodEnd && (trial || paid) ? ` · until ${new Date(b.periodEnd).toLocaleDateString()}` : '';
+  return `<span class="plan-badge ${trial ? 'trial' : paid ? 'paid' : ''}">${trial ? 'Trial' : b.planName || 'Starter'}</span><div class="biz-email">${until.replace(' · ', '')}</div>`;
+}
+async function setPlan(id, name) {
+  const plan = (prompt(`Set plan for "${name}"\n\nType free, growth or pro:`) || '').trim().toLowerCase();
+  if (!plan) return;
+  if (!['free', 'growth', 'pro'].includes(plan)) return alert('Please type exactly: free, growth or pro');
+  let days = 30;
+  if (plan !== 'free') { days = Number(prompt('For how many days? (e.g. 30 for a month, 365 for a year)', '30')); if (!days || days < 1) return; }
+  const r = await apiFetch(`${API_BASE}/api/admin/businesses/${id}/plan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan, days }) });
+  if (!r.ok) return alert((await r.json()).error || 'Could not set plan');
+  loadBusinesses(); loadBilling(); loadMetaCheck();
+}
+async function loadMetaCheck() {
+  const box = document.getElementById('mc-body'), btn = document.getElementById('mc-run'); btn.disabled = true; btn.textContent = 'Checking…'; box.textContent = '';
+  const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  try {
+    const r = await apiFetch(`${API_BASE}/api/admin/meta-check`); const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Failed');
+    const rows = d.checks.map(c => `<div style="display:flex;gap:10px;padding:9px 0;border-top:1px solid var(--border,#e4e8e5)"><span style="font-weight:700;color:${c.ok ? '#1a7f5a' : '#c0392b'};width:16px">${c.ok ? '✓' : '✗'}</span><div style="flex:1"><div style="font-weight:600">${esc(c.label)}</div>${c.detail ? `<div style="color:var(--text-secondary);font-size:12px">${esc(c.detail)}</div>` : ''}${!c.ok && c.fix ? `<div style="font-size:12px;margin-top:3px">→ ${esc(c.fix)}</div>` : ''}</div></div>`).join('');
+    const conn = Object.keys(d.connected).length ? Object.entries(d.connected).map(([k, n]) => `${n} ${k}`).join(', ') : 'none yet';
+    box.innerHTML = `<div style="font-weight:700;margin-bottom:6px;color:${d.ready ? '#1a7f5a' : '#b7791f'}">${d.ready ? 'Ready — merchants can connect their channels.' : 'Not ready yet — fix the items marked ✗.'}</div>${rows}
+      <div style="border-top:1px solid var(--border,#e4e8e5);padding-top:10px;margin-top:4px;font-size:12px;line-height:1.7"><b>Paste into Meta</b><br>Webhook callback URL: <code>${esc(d.webhookUrl)}</code><br>Verify token: <code>${esc(d.verifyToken || '(set META_VERIFY_TOKEN first)')}</code><br>Data deletion URL: <code>${esc(d.callbacks.dataDeletion)}</code><br>Deauthorize URL: <code>${esc(d.callbacks.deauthorize)}</code><br><span style="color:var(--text-secondary)">Connected stores' channels: ${esc(conn)}</span></div>`;
+  } catch (e) { box.textContent = 'Could not run the check: ' + e.message; }
+  btn.disabled = false; btn.textContent = 'Run check';
+}
+async function loadBilling() {
+  try {
+    const b = await apiFetch(`${API_BASE}/api/admin/billing`).then(r => r.json());
+    document.getElementById('bill-mrr').textContent = naira(b.mrr);
+    document.getElementById('bill-growth').textContent = b.counts.growth; document.getElementById('bill-pro').textContent = b.counts.pro;
+    document.getElementById('bill-trial').textContent = b.counts.trial; document.getElementById('bill-free').textContent = b.counts.free;
+  } catch (e) { /* billing endpoint not deployed yet */ }
+}
+function renderBusinessesTable(businesses) {
+  document.getElementById('biz-count').textContent = `(${businesses.length})`; { const nb = document.getElementById('nav-biz-count'); if (nb && !document.getElementById('biz-search').value) nb.textContent = businesses.length; }
+
+  if (!businesses.length) {
+    document.getElementById('biz-tbody').innerHTML = `<tr><td colspan="8" class="empty-state">No businesses match.</td></tr>`;
+    return;
+  }
+
+  document.getElementById('biz-tbody').innerHTML = businesses.map(b => `
+    <tr class="biz-row" onclick="openStoreDetail(${b.id})">
+      <td><div class="biz-name">${b.name}</div><div class="biz-email">${b.ownerEmail}</div>${b.isActive !== undefined ? `<span class="status-badge ${b.isActive ? 'status-active' : 'status-dormant'}">${b.isActive ? 'Active' : 'Dormant'}</span>` : ''}</td>
+      <td>${planBadge(b)}</td>
+      <td>${new Date(b.createdAt).toLocaleDateString()}</td>
+      <td>${b.productCount}</td>
+      <td>${b.customerCount}</td>
+      <td>${b.orderCount}</td>
+      <td>${naira(b.totalRevenue)}</td>
+      <td style="white-space:nowrap"><button class="btn-plan" onclick="event.stopPropagation(); setPlan(${b.id}, '${b.name.replace(/'/g, "\\'")}')">Set plan</button> <button class="del-btn" onclick="event.stopPropagation(); deleteBusiness(${b.id}, '${b.name.replace(/'/g, "\\'")}')">Delete</button></td>
+    </tr>
+  `).join('');
+}
+
+function filterBusinesses() {
+  const search = document.getElementById('biz-search').value.trim().toLowerCase();
+  const all = window._lastBusinesses || [];
+  const filtered = !search ? all : all.filter(b =>
+    b.name.toLowerCase().includes(search) || b.ownerEmail.toLowerCase().includes(search)
+  );
+  renderBusinessesTable(filtered);
+}
+
+async function loadBusinesses() {
+  loadBilling();
+  const businesses = await apiFetch(`${API_BASE}/api/admin/businesses`).then(r => r.json());
+  window._lastBusinesses = businesses;
+  renderBusinessesTable(businesses);
+
+  let timeseries = null;
+  try {
+    const tsRes = await apiFetch(`${API_BASE}/api/admin/timeseries?days=56`);
+    if (tsRes.ok) timeseries = await tsRes.json();
+  } catch (e) { /* endpoint not deployed yet — fall back below */ }
+
+  renderAllCharts(businesses, timeseries);
+}
+
+// ---------- Chart data derivation ----------
+// The backend only gives us a snapshot (current totals) plus each business's
+// createdAt/productCount/orderCount/totalRevenue. There's no per-order timestamp
+// yet, so "growth over time" here is grouped by each business's SIGNUP week, not
+// by when individual orders happened. It's a real, honest trend (it shows the
+// platform's growth cohort by cohort) but if you want true day-by-day revenue/order
+// trends, the backend would need a timeseries endpoint (e.g. daily order sums).
+
+const CHART_WEEKS = 8;
+
+function startOfWeek(d) {
+  const date = new Date(d);
+  const day = date.getDay(); // 0 = Sunday
+  const diff = (day === 0 ? -6 : 1) - day; // shift to Monday
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + diff);
+  return date;
+}
+
+function getWeekStarts() {
+  const now = new Date();
+  const thisWeekStart = startOfWeek(now);
+  const weekStarts = [];
+  for (let i = CHART_WEEKS - 1; i >= 0; i--) {
+    const d = new Date(thisWeekStart);
+    d.setDate(d.getDate() - i * 7);
+    weekStarts.push(d);
+  }
+  return weekStarts;
+}
+
+function weekLabels(weekStarts) {
+  return weekStarts.map(d => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }));
+}
+
+// Signup-based buckets — these ARE exact, since business.createdAt is a real timestamp.
+function buildWeeklyBuckets(businesses) {
+  const weekStarts = getWeekStarts();
+  const labels = weekLabels(weekStarts);
+  const earliestWindowStart = weekStarts[0];
+  let baselineCount = 0;
+  const counts = weekStarts.map(() => 0);
+
+  businesses.forEach(b => {
+    const created = new Date(b.createdAt);
+    if (created < earliestWindowStart) { baselineCount += 1; return; }
+    for (let i = weekStarts.length - 1; i >= 0; i--) {
+      if (created >= weekStarts[i]) { counts[i] += 1; break; }
+    }
+  });
+
+  const cumulativeCount = [];
+  let run = baselineCount;
+  counts.forEach(c => { run += c; cumulativeCount.push(run); });
+
+  // Fallback approximation, used only if the /timeseries endpoint isn't available yet.
+  let baselineRevenue = 0, baselineOrders = 0;
+  const revBuckets = weekStarts.map(() => 0);
+  const orderBuckets = weekStarts.map(() => 0);
+  businesses.forEach(b => {
+    const created = new Date(b.createdAt);
+    const revenue = Number(b.totalRevenue) || 0;
+    const orders = Number(b.orderCount) || 0;
+    if (created < earliestWindowStart) { baselineRevenue += revenue; baselineOrders += orders; return; }
+    for (let i = weekStarts.length - 1; i >= 0; i--) {
+      if (created >= weekStarts[i]) { revBuckets[i] += revenue; orderBuckets[i] += orders; break; }
+    }
+  });
+  const cumulativeRevenueApprox = [], cumulativeOrdersApprox = [];
+  let runRev = baselineRevenue, runOrd = baselineOrders;
+  revBuckets.forEach((r, i) => {
+    runRev += r; runOrd += orderBuckets[i];
+    cumulativeRevenueApprox.push(runRev);
+    cumulativeOrdersApprox.push(runOrd);
+  });
+
+  return { labels, cumulativeCount, weeklyNew: counts, cumulativeRevenueApprox, cumulativeOrdersApprox };
+}
+
+// Real day-level order/revenue data from /api/admin/timeseries, bucketed to match the same weeks.
+function buildWeeklyFromTimeseries(timeseries) {
+  const weekStarts = getWeekStarts();
+  const earliestWindowStart = weekStarts[0];
+  let baselineRevenue = 0, baselineOrders = 0;
+  const revBuckets = weekStarts.map(() => 0);
+  const orderBuckets = weekStarts.map(() => 0);
+
+  timeseries.forEach(day => {
+    const date = new Date(day.date + 'T00:00:00');
+    const revenue = Number(day.revenue) || 0;
+    const orders = Number(day.orderCount) || 0;
+    if (date < earliestWindowStart) { baselineRevenue += revenue; baselineOrders += orders; return; }
+    for (let i = weekStarts.length - 1; i >= 0; i--) {
+      if (date >= weekStarts[i]) { revBuckets[i] += revenue; orderBuckets[i] += orders; break; }
+    }
+  });
+
+  const cumulativeRevenue = [], cumulativeOrders = [];
+  let runRev = baselineRevenue, runOrd = baselineOrders;
+  revBuckets.forEach((r, i) => {
+    runRev += r; runOrd += orderBuckets[i];
+    cumulativeRevenue.push(runRev);
+    cumulativeOrders.push(runOrd);
+  });
+
+  return { cumulativeRevenue, cumulativeOrders };
+}
+
+function cv(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+const KZ_VARS = ['--g', '--blue', '--amber', '--text-secondary', '--grid'];
+function kzSnap() { const o = {}; KZ_VARS.forEach(n => { o[n] = cv(n); }); return o; }
+function kzGetTheme() { return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'; }
+function kzRecolor(prev) {
+  const now = kzSnap();
+  const swap = c => { if (typeof c !== 'string') return c; for (const n of KZ_VARS) { if (prev[n] && c.toLowerCase().startsWith(prev[n].toLowerCase())) return now[n] + c.slice(prev[n].length); } return c; };
+  const arr = v => Array.isArray(v) ? v.map(swap) : swap(v);
+  if (!window.Chart) return;
+  Object.values(Chart.instances).forEach(ch => {
+    try {
+      ch.data.datasets.forEach(d => ['backgroundColor', 'borderColor', 'pointBackgroundColor'].forEach(k => { if (d[k] !== undefined) d[k] = arr(d[k]); }));
+      Object.values(ch.options.scales || {}).forEach(sc => { if (sc.grid && sc.grid.color) sc.grid.color = swap(sc.grid.color); if (sc.ticks && sc.ticks.color) sc.ticks.color = swap(sc.ticks.color); });
+      const lg = ch.options.plugins && ch.options.plugins.legend && ch.options.plugins.legend.labels; if (lg && lg.color) lg.color = swap(lg.color);
+      ch.update('none');
+    } catch (e) {}
+  });
+}
+function kzApplyTheme(t, persist) {
+  const prev = kzSnap(), root = document.documentElement;
+  if (persist) root.classList.add('kz-theming');
+  root.setAttribute('data-theme', t);
+  try { if (persist) localStorage.setItem('kooza_theme', t); } catch (e) {}
+  kzRecolor(prev);
+  document.querySelectorAll('[data-theme-toggle]').forEach(b => { const l = t === 'light' ? 'Switch to dark mode' : 'Switch to light mode'; b.setAttribute('aria-label', l); b.setAttribute('title', l); });
+  if (persist) setTimeout(() => root.classList.remove('kz-theming'), 320);
+}
+function kzToggleTheme() { kzApplyTheme(kzGetTheme() === 'light' ? 'dark' : 'light', true); }
+window.addEventListener('storage', e => { if (e.key === 'kooza_theme' && (e.newValue === 'light' || e.newValue === 'dark') && e.newValue !== kzGetTheme()) kzApplyTheme(e.newValue, false); });
+kzApplyTheme(kzGetTheme(), false);
+
+let _charts = {};
+function upsertChart(id, config) {
+  const canvas = document.getElementById(id);
+  if (!canvas) return;
+  if (_charts[id]) { _charts[id].destroy(); }
+  _charts[id] = new Chart(canvas, config);
+}
+
+function sparklineConfig(data, color) {
+  return {
+    type: 'line',
+    data: { labels: data.map((_, i) => i), datasets: [{ data, borderColor: color, borderWidth: 2, pointRadius: 0, tension: 0.35, fill: true, backgroundColor: color + '1A' }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      scales: { x: { display: false }, y: { display: false } },
+      elements: { line: { borderJoinStyle: 'round' } }
+    }
+  };
+}
+
+function renderAllCharts(businesses, timeseries) {
+  const { labels, cumulativeCount, weeklyNew, cumulativeRevenueApprox, cumulativeOrdersApprox } = buildWeeklyBuckets(businesses);
+
+  const usingRealData = Array.isArray(timeseries) && timeseries.length > 0;
+  const { cumulativeRevenue, cumulativeOrders } = usingRealData
+    ? buildWeeklyFromTimeseries(timeseries)
+    : { cumulativeRevenue: cumulativeRevenueApprox, cumulativeOrders: cumulativeOrdersApprox };
+
+  document.querySelectorAll('.chart-sub[data-growth-sub]').forEach(el => {
+    el.textContent = usingRealData
+      ? 'Cumulative totals from real daily order data (last 8 weeks)'
+      : "Cumulative totals, grouped by each business's signup week (approximate — deploy /api/admin/timeseries for exact daily data)";
+  });
+
+  // Stat card sparklines
+  upsertChart('spark-businesses', sparklineConfig(cumulativeCount, getComputedStyle(document.documentElement).getPropertyValue('--g2')));
+  upsertChart('spark-new', sparklineConfig(weeklyNew, getComputedStyle(document.documentElement).getPropertyValue('--amber')));
+  upsertChart('spark-orders', sparklineConfig(cumulativeOrders, getComputedStyle(document.documentElement).getPropertyValue('--blue')));
+  upsertChart('spark-revenue', sparklineConfig(cumulativeRevenue, getComputedStyle(document.documentElement).getPropertyValue('--g')));
+
+  const grid = cv('--grid');
+  const textSec = cv('--text-secondary');
+
+  // Growth combo chart (revenue line + orders line, dual axis)
+  upsertChart('chart-growth', {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Cumulative revenue', data: cumulativeRevenue, yAxisID: 'y',
+          borderColor: cv('--g'), backgroundColor: cv('--g') + '22', fill: true, tension: 0.3, pointRadius: 2
+        },
+        {
+          label: 'Cumulative orders', data: cumulativeOrders, yAxisID: 'y1',
+          borderColor: cv('--blue'), backgroundColor: 'transparent', borderDash: [4, 3], tension: 0.3, pointRadius: 2
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 8, boxHeight: 8, usePointStyle: true, font: { size: 11 }, color: textSec } },
+        tooltip: {
+          callbacks: {
+            label: ctx => ctx.dataset.label === 'Cumulative revenue' ? ` ${naira(ctx.parsed.y)}` : ` ${ctx.parsed.y} orders`
+          }
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: textSec, font: { size: 10 } } },
+        y: { position: 'left', grid: { color: grid }, ticks: { color: textSec, font: { size: 10 }, callback: v => naira(v) } },
+        y1: { position: 'right', grid: { display: false }, ticks: { color: textSec, font: { size: 10 } } }
+      }
+    }
+  });
+
+  // New signups per week
+  upsertChart('chart-signups', {
+    type: 'bar',
+    data: { labels, datasets: [{ label: 'New businesses', data: weeklyNew, backgroundColor: cv('--g'), borderRadius: 5, maxBarThickness: 28 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: textSec, font: { size: 10 } } },
+        y: { grid: { color: grid }, ticks: { color: textSec, font: { size: 10 }, precision: 0 } }
+      }
+    }
+  });
+
+  // Top businesses by revenue (horizontal bar)
+  const top = [...businesses].sort((a, b) => Number(b.totalRevenue) - Number(a.totalRevenue)).slice(0, 6);
+  upsertChart('chart-top-businesses', {
+    type: 'bar',
+    data: {
+      labels: top.map(b => b.name),
+      datasets: [{ data: top.map(b => Number(b.totalRevenue) || 0), backgroundColor: cv('--g'), borderRadius: 5, maxBarThickness: 20 }]
+    },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${naira(ctx.parsed.x)}` } } },
+      scales: {
+        x: { grid: { color: grid }, ticks: { color: textSec, font: { size: 10 }, callback: v => naira(v) } },
+        y: { grid: { display: false }, ticks: { color: textSec, font: { size: 11 } } }
+      }
+    }
+  });
+
+  // Revenue concentration donut (top 5 vs rest)
+  const sorted = [...businesses].sort((a, b) => Number(b.totalRevenue) - Number(a.totalRevenue));
+  const top5Sum = sorted.slice(0, 5).reduce((s, b) => s + (Number(b.totalRevenue) || 0), 0);
+  const restSum = sorted.slice(5).reduce((s, b) => s + (Number(b.totalRevenue) || 0), 0);
+  upsertChart('chart-revenue-share', {
+    type: 'doughnut',
+    data: {
+      labels: ['Top 5 businesses', 'All other businesses'],
+      datasets: [{ data: [top5Sum, restSum], backgroundColor: [cv('--g'), cv('--grid')], borderWidth: 0 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: '68%',
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${naira(ctx.parsed)}` } } }
+    }
+  });
+  const total = top5Sum + restSum;
+  const pct = n => total ? Math.round((n / total) * 100) : 0;
+  document.getElementById('revenue-share-legend').innerHTML = `
+    <div class="legend-item"><span class="legend-dot" style="background:var(--g)"></span>Top 5 — ${pct(top5Sum)}%</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--grid)"></span>Rest — ${pct(restSum)}%</div>
+  `;
+}
+
+// ---------- Store detail modal ----------
+let _modalChart = null;
+
+function openStoreDetail(id) {
+  const business = (window._lastBusinesses || []).find(b => b.id === id);
+  if (!business) return;
+
+  document.getElementById('modal-store-name').textContent = business.name;
+  document.getElementById('modal-store-sub').textContent =
+    `${business.ownerEmail} · Signed up ${new Date(business.createdAt).toLocaleDateString()}`;
+  document.getElementById('modal-products').textContent = business.productCount;
+  document.getElementById('modal-customers').textContent = business.customerCount;
+  document.getElementById('modal-orders').textContent = business.orderCount;
+  document.getElementById('modal-revenue').textContent = naira(business.totalRevenue);
+  document.getElementById('modal-aov').textContent = business.avgOrderValue !== undefined ? naira(Math.round(business.avgOrderValue)) : '—';
+  document.getElementById('modal-status').innerHTML = business.isActive !== undefined
+    ? `<span class="status-badge ${business.isActive ? 'status-active' : 'status-dormant'}">${business.isActive ? 'Active' : 'Dormant'}</span>`
+    : '—';
+  document.getElementById('modal-days-to-sale').textContent = (business.daysToFirstSale !== undefined && business.daysToFirstSale !== null) ? `${business.daysToFirstSale}d` : '—';
+  document.getElementById('modal-last-order').textContent = business.lastOrderAt ? new Date(business.lastOrderAt).toLocaleDateString() : '—';
+
+  document.getElementById('modal-chart-loading').style.display = 'block';
+  document.getElementById('modal-store-chart').style.display = 'none';
+  document.getElementById('store-modal-overlay').classList.add('open');
+
+  loadStoreTimeseries(id);
+  loadStoreFeatures(id);
+}
+
+
+// ---------- Feature adoption (platform-wide) ----------
+const LOOK_NAMES = { none: 'Standard', glass: 'Glass', neon: 'Neon', luxe: 'Luxe', pastel: 'Pastel', vintage: 'Vintage', mono: 'Mono' };
+function escA(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function pills(obj, names) {
+  const e = Object.entries(obj || {}).sort((a, b) => b[1] - a[1]);
+  return e.length ? e.map(([k, n]) => `<span>${escA((names && names[k]) || k)}<b>${n}</b></span>`).join('') : '—';
+}
+async function loadFeatures() {
+  let f; try { const r = await apiFetch(`${API_BASE}/api/admin/features`); if (!r.ok) return; f = await r.json(); } catch (e) { return; }
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  const total = (window._lastBusinesses || []).length;
+  set('fa-addr', f.addresses.subdomains + f.addresses.customDomains);
+  set('fa-addr-sub', `${f.addresses.subdomains} subdomains · ${f.addresses.customDomains} own domains (${f.addresses.customVerified} verified)`);
+  const ch = f.channels || {}; const cn = k => (ch[k] ? ch[k].connected : 0); const errs = Object.values(ch).reduce((a, c) => a + c.errors, 0);
+  set('fa-chan', cn('whatsapp') + cn('facebook') + cn('instagram'));
+  set('fa-chan-sub', `${cn('whatsapp')} WhatsApp · ${cn('facebook')} Messenger · ${cn('instagram')} Instagram${errs ? ` · ${errs} with errors` : ''}`);
+  const ib = Object.values(f.inbox.byChannel || {}).reduce((a, n) => a + n, 0);
+  set('fa-inbox', ib); set('fa-inbox-sub', `${f.inbox.recent} active in the last 30 days`);
+  set('fa-camp', f.campaigns.total); set('fa-camp-sub', `${f.campaigns.sent} sent · ${f.campaigns.messages} messages · ${f.campaigns.stores} stores`);
+  set('fa-auto', f.automations.enabled); set('fa-auto-sub', `across ${f.automations.stores} stores`);
+  set('fa-disc', f.discounts.codes); set('fa-disc-sub', `${f.discounts.active} active · used ${f.discounts.uses}× · ${f.discounts.stores} stores`);
+  set('fa-sales', f.sales.total); set('fa-sales-sub', `${f.sales.live} running now · ${f.sales.stores} stores`);
+  set('fa-pay', f.paystack.stores); set('fa-pay-sub', total ? `of ${total} stores have a bank account` : 'stores with a bank account');
+  document.getElementById('fa-look-list').innerHTML = pills(f.looks, LOOK_NAMES);
+  document.getElementById('fa-design-list').innerHTML = pills(f.designs);
+  document.getElementById('fa-display-list').innerHTML = pills(f.displays);
+}
+
+// ---------- Per-store features (inside the store modal) ----------
+async function loadStoreFeatures(id) {
+  const box = document.getElementById('modal-features'); box.innerHTML = '<div class="fx-item" style="grid-column:1/-1;color:var(--text-secondary)">Loading…</div>';
+  let f; try { const r = await apiFetch(`${API_BASE}/api/admin/businesses/${id}/features`); if (!r.ok) throw 0; f = await r.json(); } catch (e) { box.innerHTML = '<div class="fx-item" style="grid-column:1/-1">Could not load this store\'s features (is the latest API deployed?).</div>'; return; }
+  const item = (t, body) => `<div class="fx-item"><div class="t">${t}</div>${body}</div>`;
+  const a = f.address, chips = f.channels.length ? f.channels.map(c => `${escA(c.channel)}${c.detail ? ' · ' + escA(c.detail) : ''} <span class="${c.status === 'active' ? 'fx-ok' : 'fx-warn'}">${escA(c.status)}</span>${c.error ? ` <span class="fx-warn">(${escA(c.error)})</span>` : ''} <button class="fx-mini" onclick="adminDisconnect(${id},'${escA(c.channel)}')">Disconnect</button>`).join('<br>') : 'None connected';
+  const addr = [a.subdomain ? `Subdomain: <b>${escA(a.subdomain)}</b>` : '', a.customDomain ? `Own domain: <b>${escA(a.customDomain)}</b> <span class="${a.customDomainStatus === 'verified' ? 'fx-ok' : 'fx-warn'}">${escA(a.customDomainStatus)}</span>` : ''].filter(Boolean).join('<br>') || 'Default link only';
+  const rel = (a.subdomain || a.customDomain) ? `<br><button class="fx-mini" onclick="adminRelease(${id})">Release address</button>` : '';
+  const autos = f.automations.length ? f.automations.map(x => `${escA(x.kind.replace('_', ' '))}: <span class="${x.enabled ? 'fx-ok' : ''}">${x.enabled ? 'on' : 'off'}</span>`).join('<br>') : 'None set up';
+  const inbox = Object.entries(f.inbox).map(([k, n]) => `${escA(k)}: ${n}`).join('<br>') || 'No conversations';
+  box.innerHTML =
+    item('Store look &amp; layout', `Look: <b>${escA(LOOK_NAMES[f.look] || f.look)}</b><br>Design: <b>${escA(f.design)}</b><br>Display: <b>${escA(f.display)}</b>`) +
+    item('Store address', `${addr}${a.live ? `<br><a href="${escA(a.live)}" target="_blank" rel="noopener" style="color:var(--g)">${escA(a.live.replace(/^https?:\/\//, ''))}</a>` : ''}${rel}`) +
+    item('Messaging channels', chips) +
+    item('Inbox', inbox) +
+    item('Marketing', `${f.campaigns.total} campaigns (${f.campaigns.sent} sent, ${f.campaigns.messages} messages)<br>${autos}`) +
+    item('Discounts &amp; sales', `${f.discounts.active}/${f.discounts.total} codes active · used ${f.discounts.uses}×<br>${f.sales.live} sale(s) running of ${f.sales.total}`) +
+    item('Payments &amp; delivery', `Paystack: ${f.paystack.connected ? `<span class="fx-ok">connected</span>${f.paystack.bank ? ' · ' + escA(f.paystack.bank) : ''}` : 'not connected'}<br>${f.deliveryZones} delivery zone(s) · ${f.expenses} expense(s)`);
+}
+async function adminRelease(id) {
+  if (!confirm('Release this store\'s subdomain and custom domain? The links stop working immediately.')) return;
+  const r = await apiFetch(`${API_BASE}/api/admin/businesses/${id}/release-address`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ which: 'both' }) });
+  if (!r.ok) return alert('Could not release the address.'); loadStoreFeatures(id); loadFeatures();
+}
+async function adminDisconnect(id, channel) {
+  if (!confirm(`Disconnect ${channel} for this store?`)) return;
+  const r = await apiFetch(`${API_BASE}/api/admin/businesses/${id}/disconnect-channel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel }) });
+  if (!r.ok) return alert('Could not disconnect.'); loadStoreFeatures(id); loadFeatures();
+}
+
+
+function showPage(k) {
+  document.querySelectorAll('.pg').forEach(p => p.classList.toggle('on', p.dataset.pg === k));
+  document.querySelectorAll('.nav-i').forEach(a => a.classList.toggle('on', a.dataset.go === k));
+  try { history.replaceState(null, '', '#' + k); } catch (e) {}
+  window.scrollTo(0, 0);
+  if (k === 'overview' && window.Chart) setTimeout(() => Object.values(Chart.instances).forEach(c => { try { c.resize(); } catch (e) {} }), 30);
+}
+(function () { var h = (location.hash || '').slice(1); if (h && document.getElementById('pg-' + h)) setTimeout(() => showPage(h), 0); })();
+
+function closeStoreDetail() {
+  document.getElementById('store-modal-overlay').classList.remove('open');
+}
+
+async function loadStoreTimeseries(id) {
+  const loadingEl = document.getElementById('modal-chart-loading');
+  const canvas = document.getElementById('modal-store-chart');
+  const subEl = document.getElementById('modal-chart-sub');
+
+  let series = null;
+  try {
+    const res = await apiFetch(`${API_BASE}/api/admin/businesses/${id}/timeseries?days=56`);
+    if (res.ok) series = await res.json();
+  } catch (e) { /* handled below */ }
+
+  if (!series) {
+    loadingEl.textContent = "Couldn't load this store's order history. Make sure the /businesses/:id/timeseries route is deployed.";
+    return;
+  }
+
+  loadingEl.style.display = 'none';
+  canvas.style.display = 'block';
+  subEl.textContent = 'Last 8 weeks, real daily order data for this store';
+
+  const weekStarts = getWeekStarts();
+  const labels = weekLabels(weekStarts);
+  const earliestWindowStart = weekStarts[0];
+  const revBuckets = weekStarts.map(() => 0);
+  const orderBuckets = weekStarts.map(() => 0);
+  let baselineRevenue = 0, baselineOrders = 0;
+
+  series.forEach(day => {
+    const date = new Date(day.date + 'T00:00:00');
+    const revenue = Number(day.revenue) || 0;
+    const orders = Number(day.orderCount) || 0;
+    if (date < earliestWindowStart) { baselineRevenue += revenue; baselineOrders += orders; return; }
+    for (let i = weekStarts.length - 1; i >= 0; i--) {
+      if (date >= weekStarts[i]) { revBuckets[i] += revenue; orderBuckets[i] += orders; break; }
+    }
+  });
+
+  const cumulativeRevenue = [], cumulativeOrders = [];
+  let runRev = baselineRevenue, runOrd = baselineOrders;
+  revBuckets.forEach((r, i) => {
+    runRev += r; runOrd += orderBuckets[i];
+    cumulativeRevenue.push(runRev);
+    cumulativeOrders.push(runOrd);
+  });
+
+  const grid = cv('--grid');
+  const textSec = cv('--text-secondary');
+
+  if (_modalChart) _modalChart.destroy();
+  _modalChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Cumulative revenue', data: cumulativeRevenue, yAxisID: 'y', borderColor: cv('--g'), backgroundColor: cv('--g') + '22', fill: true, tension: 0.3, pointRadius: 2 },
+        { label: 'Cumulative orders', data: cumulativeOrders, yAxisID: 'y1', borderColor: cv('--blue'), backgroundColor: 'transparent', borderDash: [4, 3], tension: 0.3, pointRadius: 2 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 8, boxHeight: 8, usePointStyle: true, font: { size: 11 }, color: textSec } },
+        tooltip: { callbacks: { label: ctx => ctx.dataset.label === 'Cumulative revenue' ? ` ${naira(ctx.parsed.y)}` : ` ${ctx.parsed.y} orders` } }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: textSec, font: { size: 10 } } },
+        y: { position: 'left', grid: { color: grid }, ticks: { color: textSec, font: { size: 10 }, callback: v => naira(v) } },
+        y1: { position: 'right', grid: { display: false }, ticks: { color: textSec, font: { size: 10 } } }
+      }
+    }
+  });
+}
+
+async function deleteBusiness(id, name) {
+  if (!confirm(`Delete "${name}" and ALL of its data (products, orders, customers, payments)? This cannot be undone.`)) return;
+  try {
+    await apiFetch(`${API_BASE}/api/admin/businesses/${id}`, { method: 'DELETE' });
+    await Promise.all([loadStats(), loadBusinesses()]);
+  } catch (err) {
+    alert('Could not delete this business.');
+  }
+}
+
+// On load: a reset-password link takes priority over auto-login, since the
+// person followed that link intentionally, even if an old session is stored.
+const _urlToken = new URLSearchParams(window.location.search).get('token');
+if (!_urlToken && localStorage.getItem('bizflow_admin_token')) {
+  enterAdmin();
+}
+</script>
+</body>
+</html>
