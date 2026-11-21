@@ -436,3 +436,18 @@ CREATE TABLE IF NOT EXISTS meta_channels (
 );
 CREATE INDEX IF NOT EXISTS idx_meta_channels_business ON meta_channels(business_id);
 ALTER TABLE inbox_conversations ADD COLUMN IF NOT EXISTS meta_channel_id INTEGER;
+
+
+-- Plans & features managed from the admin panel (overrides on top of db/plans.js)
+CREATE TABLE IF NOT EXISTS plan_settings (
+  plan_key TEXT PRIMARY KEY,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,   -- name, tagline, price, limits, features, highlights, active
+  custom BOOLEAN NOT NULL DEFAULT false,
+  sort INTEGER NOT NULL DEFAULT 100,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS feature_settings (
+  feature_key TEXT PRIMARY KEY,
+  category TEXT NOT NULL DEFAULT 'paid',     -- free | paid
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
