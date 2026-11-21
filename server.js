@@ -182,6 +182,7 @@ require('./db/campaigns').startScheduler(); // sends scheduled campaigns when th
 require('./db/automations').startAutomations();
 require('./db/billing').startBilling(); // renews plans on saved cards, ends lapsed plans, reminds about trials // sends automated emails (win-back, post-purchase) when they're due
 
+require('./db/planstore').start(); // plans & features the admin has edited
 app.listen(PORT, () => {
   console.log(`BizFlow API running at http://localhost:${PORT}`);
 });
