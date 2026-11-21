@@ -328,6 +328,78 @@ router.post('/businesses/:id/disconnect-channel', async (req, res) => {
   catch (e) { res.status(500).json({ error: 'Could not disconnect' }); }
 });
 
+// ---- Plans & features: admin creates plans and decides which features each plan includes
+const planstore = require('../db/planstore');
+const { FEATURES } = require('../db/plans');
+const slug = t => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
+
+function cleanPlan(b, existing) {
+  const out = {};
+  if (b.name !== undefined) { const n = String(b.name).trim().slice(0, 40); if (!n) throw new Error('Give the plan a name'); out.name = n; }
+  if (b.tagline !== undefined) out.tagline = String(b.tagline).trim().slice(0, 120);
+  if (b.price) { const m = Number(b.price.monthly), y = Number(b.price.yearly); if (!(m >= 0) || !(y >= 0)) throw new Error('Prices must be 0 or more'); out.price = { monthly: Math.round(m), yearly: Math.round(y) }; }
+  if (b.limits) {
+    const lim = {}; for (const k of ['products', 'emails']) if (k in b.limits) { const v = b.limits[k]; lim[k] = (v === null || v === '') ? (k === 'products' ? null : 0) : Math.max(0, Math.round(Number(v))); if (lim[k] !== null && Number.isNaN(lim[k])) throw new Error('Limits must be numbers'); }
+    out.limits = lim;
+  }
+  if (b.features) { const f = {}; for (const x of FEATURES.filter(x => x.enforced)) if (x.key in b.features) f[x.key] = !!b.features[x.key]; out.features = f; }
+  if (b.highlights !== undefined) out.highlights = (Array.isArray(b.highlights) ? b.highlights : String(b.highlights).split('\n')).map(x => String(x).trim()).filter(Boolean).slice(0, 12);
+  if (b.active !== undefined) out.active = !!b.active;
+  return out;
+}
+
+// GET /api/admin/plans — every plan (including hidden ones), the feature catalogue, and how many stores are on each plan
+router.get('/plans', async (req, res) => {
+  const snap = planstore.snapshot();
+  const counts = Object.fromEntries((await safe(`SELECT plan AS k, COUNT(*) AS n FROM subscriptions GROUP BY 1`, [], [])).map(r => [r.k, num(r.n)]));
+  res.json({ ...snap, subscribers: counts, trialDays: require('../db/plans').TRIAL_DAYS });
+});
+
+// PUT /api/admin/plans/:key — edit a plan (name, prices, limits, features, highlights, visibility); sent fields are merged into what is saved
+router.put('/plans/:key', async (req, res) => {
+  const key = req.params.key, snap = planstore.snapshot(), cur = snap.plans.find(p => p.key === key);
+  if (!cur) return res.status(404).json({ error: 'Plan not found' });
+  try {
+    const patch = cleanPlan(req.body || {});
+    if (key === 'free' && patch.active === false) throw new Error('The Starter plan cannot be hidden');
+    const saved = (planstore.saved()[key] && planstore.saved()[key].data) || {};
+    const next = { ...saved, ...patch, price: { ...(saved.price || {}), ...(patch.price || {}) }, limits: { ...(saved.limits || {}), ...(patch.limits || {}) }, features: { ...(saved.features || {}), ...(patch.features || {}) } };
+    await planstore.savePlan(key, next, !cur.builtin, (planstore.saved()[key] || {}).sort);
+    res.json(planstore.snapshot().plans.find(p => p.key === key));
+  } catch (e) { res.status(400).json({ error: e.message || 'Could not save the plan' }); }
+});
+
+// POST /api/admin/plans — create a new plan
+router.post('/plans', async (req, res) => {
+  try {
+    const b = req.body || {}, key = slug(b.key || b.name);
+    if (!key) throw new Error('Give the plan a name');
+    if (planstore.snapshot().plans.some(p => p.key === key)) throw new Error('A plan with that name already exists');
+    const data = cleanPlan({ price: { monthly: 0, yearly: 0 }, limits: { products: null, emails: 0 }, features: {}, ...b, name: b.name });
+    await planstore.savePlan(key, data, true, 100 + Object.keys(planstore.saved()).length);
+    res.status(201).json(planstore.snapshot().plans.find(p => p.key === key));
+  } catch (e) { res.status(400).json({ error: e.message || 'Could not create the plan' }); }
+});
+
+// DELETE /api/admin/plans/:key — remove a plan you created, only if nobody is on it
+router.delete('/plans/:key', async (req, res) => {
+  const cur = planstore.snapshot().plans.find(p => p.key === req.params.key);
+  if (!cur) return res.status(404).json({ error: 'Plan not found' });
+  if (cur.builtin) return res.status(400).json({ error: 'Built-in plans can be hidden but not deleted' });
+  const n = num(((await safe(`SELECT COUNT(*) AS n FROM subscriptions WHERE plan = $1`, [cur.key], [{}]))[0] || {}).n);
+  if (n) return res.status(400).json({ error: `${n} store(s) are on this plan. Hide it instead, or move them first.` });
+  await planstore.removePlan(cur.key); res.status(204).send();
+});
+
+// PUT /api/admin/features/:key — make a feature free (in every plan) or paid (switched on per plan)
+router.put('/features/:key', async (req, res) => {
+  const f = FEATURES.find(x => x.key === req.params.key), c = req.body && req.body.category;
+  if (!f) return res.status(404).json({ error: 'Unknown feature' });
+  if (!['free', 'paid'].includes(c)) return res.status(400).json({ error: 'category must be free or paid' });
+  if (!f.enforced) return res.status(400).json({ error: 'This feature is always available and cannot be changed yet' });
+  await planstore.setCategory(f.key, c); res.json(planstore.snapshot().features.find(x => x.key === f.key));
+});
+
 router.delete('/businesses/:id', async (req, res) => {
   const { rowCount } = await pool.query('DELETE FROM businesses WHERE id = $1', [req.params.id]);
   if (!rowCount) return res.status(404).json({ error: 'Business not found' });

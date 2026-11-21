@@ -17,6 +17,8 @@ const { clean: cleanCode, describe: describeDiscount } = require('../db/discount
 router.use((req, res, next) => {
   if (req.path.startsWith('/content')) return requireFeature('content')(req, res, next);
   if (req.path.startsWith('/automations') && req.method !== 'GET') return requireFeature('automations')(req, res, next);
+  if (req.path.startsWith('/discounts')) return requireFeature('discounts')(req, res, next);
+  if (req.path.startsWith('/sales')) return requireFeature('sales')(req, res, next);
   return requireFeature('marketing')(req, res, next);
 });
 
